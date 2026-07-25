@@ -183,6 +183,11 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
 
     public override Job Tick()
     {
+        if (Handler == null)
+        {
+            return null;
+        }
+
         Settings.PlannerSettings.SearchState = _plannerRunner switch
         {
             { IsRunning: true } => SearchState.Searching,
@@ -255,6 +260,11 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
 
     public override void Render()
     {
+        if (Handler == null)
+        {
+            return;
+        }
+
         if (Settings.BubbleSettings.ShowBubbles)
         {
             if (Bubbles is { Count: > 0 } bubbles)
