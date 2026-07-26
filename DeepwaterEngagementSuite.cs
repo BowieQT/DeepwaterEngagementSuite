@@ -651,7 +651,7 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         if (activeRules.Length == 0)
             return;
 
-        var color = settings.HighlightColor.Value;
+        var color = Color.Cyan;
         var thickness = settings.LineThickness.Value;
         var matchedShortNames = new List<string>();
         var seenAddresses = new HashSet<long>();

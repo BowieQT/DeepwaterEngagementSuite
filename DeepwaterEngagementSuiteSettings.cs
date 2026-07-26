@@ -166,9 +166,6 @@ public class GenesisTreeSettings
 {
     public ToggleNode Enable { get; set; } = new ToggleNode(true);
 
-    [Menu("Highlight color")]
-    public ColorNode HighlightColor { get; set; } = new ColorNode(Color.Cyan);
-
     [Menu("Line thickness")]
     public RangeNode<int> LineThickness { get; set; } = new RangeNode<int>(3, 1, 12);
 
