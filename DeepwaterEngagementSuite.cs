@@ -622,6 +622,8 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         ("Adjacent Areas contain Captainsbane", "Captainsbane", s => s.HighlightCaptainsbane),
         ("Adjacent Areas contain Filthscrabble", "Filthscrabble", s => s.HighlightFilthscrabble),
         ("Basic Currency items dropped by Monsters in adjacent Areas will instead drop as Stacked Decks", "Stacked Decks from basic currency", s => s.HighlightStackedDecksFromBasicCurrency),
+        ("Adjacent Areas contain 2 additional Treasure Anchors", "2 Treasure Anchors", s => s.HighlightTwoTreasureAnchors),
+        ("Adjacent Areas contain 4 additional Treasure Anchors", "4 Treasure Anchors", s => s.HighlightFourTreasureAnchors),
     ];
 
     private void DrawGenesisTreeHighlights()
@@ -723,18 +725,21 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
             if (settings.ShowDebugStatus)
             {
                 lines.Add($"Genesis Tree: path={pathLabel} scanned={scanned} texts={withText} passives={passiveCount}");
-                lines.Add($"matches={matchedShortNames.Count} adjacentHits={adjacentHits} containerKids={SafeChildCount(nodeContainer)}");
+                lines.Add($"goodMatches={matchedShortNames.Count} adjacentAreaTips={adjacentHits} containerKids={SafeChildCount(nodeContainer)}");
+                lines.Add("(Debug only — samples below are NOT highlights; only configured good mods are framed.)");
                 if (passiveNameSamples.Count > 0)
                     lines.Add("passives: " + string.Join(" | ", passiveNameSamples));
                 foreach (var sample in textSamples.Take(4))
-                    lines.Add($"  text: {sample}");
-                if (withText > 0 && adjacentHits == 0 && matchedShortNames.Count == 0)
-                    lines.Add("Seeing chart tips only — hover a good passive or open passive view.");
+                    lines.Add($"  sample tip: {sample}");
+                if (matchedShortNames.Count == 0 && adjacentHits > 0)
+                    lines.Add("No configured good mods on this tree (adjacent-area tips exist, but none match the highlight list).");
+                else if (withText > 0 && adjacentHits == 0 && matchedShortNames.Count == 0)
+                    lines.Add("No adjacent-area tips found — wrong panel, or hover a node once.");
             }
 
             if (settings.ShowMatchNotifier && matchedShortNames.Count > 0)
             {
-                lines.Add("Highlighted:");
+                lines.Add("Good mods found:");
                 foreach (var name in matchedShortNames)
                     lines.Add($"  • {name}");
             }

@@ -172,11 +172,11 @@ public class GenesisTreeSettings
     [Menu("Frame thickness")]
     public RangeNode<int> FrameThickness { get; set; } = new RangeNode<int>(3, 1, 12);
 
-    [Menu("Show match notifier", "On-screen list of highlighted mods while the Genesis Tree is open")]
+    [Menu("Show match notifier", "On-screen list of matched good mods only (not every adjacent-area tip)")]
     public ToggleNode ShowMatchNotifier { get; set; } = new ToggleNode(true);
 
-    [Menu("Show debug status", "Shows path/node/tooltip/match counts while the tree is open")]
-    public ToggleNode ShowDebugStatus { get; set; } = new ToggleNode(true);
+    [Menu("Show debug status", "Diagnostic counts + a few sample tips. Off by default; does not list every mod.")]
+    public ToggleNode ShowDebugStatus { get; set; } = new ToggleNode(false);
 
     [Menu("Debug: frame all nodes", "Draw a dim frame around every scanned node (for path/tooltip diagnosis)")]
     public ToggleNode DebugFrameAllNodes { get; set; } = new ToggleNode(false);
@@ -195,6 +195,12 @@ public class GenesisTreeSettings
 
     [Menu("Stacked Decks from basic currency", "Basic Currency items dropped by Monsters in adjacent Areas will instead drop as Stacked Decks")]
     public ToggleNode HighlightStackedDecksFromBasicCurrency { get; set; } = new ToggleNode(true);
+
+    [Menu("2 additional Treasure Anchors", "Adjacent Areas contain 2 additional Treasure Anchors")]
+    public ToggleNode HighlightTwoTreasureAnchors { get; set; } = new ToggleNode(true);
+
+    [Menu("4 additional Treasure Anchors", "Adjacent Areas contain 4 additional Treasure Anchors")]
+    public ToggleNode HighlightFourTreasureAnchors { get; set; } = new ToggleNode(true);
 }
 
 public enum SearchState
