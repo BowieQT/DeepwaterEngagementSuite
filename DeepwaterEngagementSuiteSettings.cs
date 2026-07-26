@@ -11,7 +11,24 @@ namespace DeepwaterEngagementSuite;
 
 public class DeepwaterEngagementSuiteSettings : ISettings
 {
-    public const MapIconsIndex DefaultEliteMonsterIcon = MapIconsIndex.HeistSpottedMiniBoss;
+    public const MapIconsIndex DefaultOtherChestIcon = MapIconsIndex.HeistSpottedMiniBoss;
+    public const MapIconsIndex DefaultBottledItemChestIcon = MapIconsIndex.QuestItem;
+    public const MapIconsIndex DefaultGoldTreasureChestIcon = MapIconsIndex.LootFilterSmallYellowCircle;
+    public const MapIconsIndex DefaultClamTreasureChestIcon = MapIconsIndex.LootFilterLargeYellowStar;
+    public const MapIconsIndex DefaultCurrencyTreasureChestIcon = MapIconsIndex.RewardCurrency;
+    public const MapIconsIndex DefaultUniqueWeaponChestIcon = MapIconsIndex.RewardWeapons;
+    public const MapIconsIndex DefaultUniqueArmourChestIcon = MapIconsIndex.RewardArmour;
+    public static readonly Color UniqueItemTint = new Color(175, 96, 37); // PoE unique orange
+    public const MapIconsIndex DefaultScarabChestIcon = MapIconsIndex.RewardScarabs;
+    public const MapIconsIndex DefaultStackedDecksChestIcon = MapIconsIndex.RewardDivinationCards;
+    public const MapIconsIndex DefaultMapsChestIcon = MapIconsIndex.RewardMaps;
+    public const MapIconsIndex DefaultCursedDucatDropIcon = MapIconsIndex.RewardPerandus;
+    public const MapIconsIndex DefaultIzaroObjectIcon = MapIconsIndex.RewardLabyrinth;
+    public const MapIconsIndex DefaultAltarCrabIcon = MapIconsIndex.RewardBestiary;
+    public const MapIconsIndex DefaultAltarOctopusIcon = MapIconsIndex.RewardBreach;
+    public const MapIconsIndex DefaultTormentedSpiritEncounterIcon = MapIconsIndex.LootFilterSmallGreenCircle;
+    // DeepwaterLantern is blank in Icons.png; BlightPortalFire is a visible fire-style stand-in.
+    public const MapIconsIndex DefaultLanternReplenishEncounterIcon = MapIconsIndex.BlightPortalFire;
 
     public Dictionary<IconPickerIndex, IconDisplaySettings> IconMapping = new();
 
@@ -22,11 +39,46 @@ public class DeepwaterEngagementSuiteSettings : ISettings
 
     public BubbleSettings BubbleSettings { get; set; } = new BubbleSettings();
     public PlannerSettings PlannerSettings { get; set; } = new PlannerSettings();
+
+    public static MapIconsIndex GetDefaultIcon(IconPickerIndex index) => index switch
+    {
+        IconPickerIndex.BottledItemChest => DefaultBottledItemChestIcon,
+        IconPickerIndex.GoldTreasureChest => DefaultGoldTreasureChestIcon,
+        IconPickerIndex.ClamTreasureChest => DefaultClamTreasureChestIcon,
+        IconPickerIndex.CurrencyTreasureChest => DefaultCurrencyTreasureChestIcon,
+        IconPickerIndex.UniqueWeaponChest => DefaultUniqueWeaponChestIcon,
+        IconPickerIndex.UniqueArmourChest => DefaultUniqueArmourChestIcon,
+        IconPickerIndex.ScarabChest => DefaultScarabChestIcon,
+        IconPickerIndex.StackedDecksChest => DefaultStackedDecksChestIcon,
+        IconPickerIndex.MapsChest => DefaultMapsChestIcon,
+        IconPickerIndex.CursedDucatDrop => DefaultCursedDucatDropIcon,
+        IconPickerIndex.RandomDucatChest => DefaultCursedDucatDropIcon,
+        IconPickerIndex.IzaroObject => DefaultIzaroObjectIcon,
+        IconPickerIndex.AltarCrab => DefaultAltarCrabIcon,
+        IconPickerIndex.AltarOctopus => DefaultAltarOctopusIcon,
+        IconPickerIndex.TormentedSpiritEncounter => DefaultTormentedSpiritEncounterIcon,
+        IconPickerIndex.LanternReplenishEncounter => DefaultLanternReplenishEncounterIcon,
+        _ => DefaultOtherChestIcon,
+    };
+
+    public static Color? GetDefaultTint(IconPickerIndex index) => index switch
+    {
+        IconPickerIndex.UniqueWeaponChest or IconPickerIndex.UniqueArmourChest => UniqueItemTint,
+        _ => null,
+    };
 }
 
 [Submenu]
 public class PlannerSettings
 {
+    // Planner weights (default 1 via ChestSettings). High-value targets are weighted higher.
+    public Dictionary<IconPickerIndex, ChestSettings> ChestSettingsMap = new()
+    {
+        [IconPickerIndex.BottledItemChest] = new ChestSettings { Weight = 30 },
+        [IconPickerIndex.ClamTreasureChest] = new ChestSettings { Weight = 2 },
+        [IconPickerIndex.LanternReplenishEncounter] = new ChestSettings { Weight = 30 },
+    };
+
     public HotkeyNodeV2 StartSearchHotkey { get; set; } = new HotkeyNodeV2(Keys.None);
     public HotkeyNodeV2 StopSearchHotkey { get; set; } = new HotkeyNodeV2(Keys.None);
     public HotkeyNodeV2 ClearSearchHotkey { get; set; } = new HotkeyNodeV2(Keys.None);

@@ -87,7 +87,8 @@ public class PathPlanner
         {
             _lootValueTable[loot] = loot switch
             {
-                Chest { Type: var type } => 1,
+                Chest { Type: var type } => _settings.ChestSettingsMap.GetValueOrDefault(type, new ChestSettings()).Weight,
+                _ => 0,
             };
         }
 

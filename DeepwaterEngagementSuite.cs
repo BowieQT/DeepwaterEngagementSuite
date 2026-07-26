@@ -128,9 +128,36 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         return _entityTypeCache.GetOrAdd(path, p => p switch
         {
             var a when a.StartsWith("Metadata/Chests/LeagueDeepwater/", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
+            var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterIzaroObject", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
+            var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterAltarCrab", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
+            var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterAltarOctopus", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
+            var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterTormentedSpiritEncounter", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
+            var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterCursedDucatDrop", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
+            var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterLanternReplenishEncounter", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
             _ => ExpeditionEntityType.None,
         });
     }
+
+    private static IconPickerIndex GetChestType(string path) => path switch
+    {
+        var p when p.Contains("BottledItemChest", StringComparison.Ordinal) => IconPickerIndex.BottledItemChest,
+        var p when p.Contains("ClamTreasureChest", StringComparison.Ordinal) => IconPickerIndex.ClamTreasureChest,
+        var p when p.Contains("CurrencyTreasureChest", StringComparison.Ordinal) => IconPickerIndex.CurrencyTreasureChest,
+        var p when p.Contains("DeepwaterAnchorUniqueWeapon", StringComparison.Ordinal) => IconPickerIndex.UniqueWeaponChest,
+        var p when p.Contains("DeepwaterAnchorUniqueArmour", StringComparison.Ordinal) => IconPickerIndex.UniqueArmourChest,
+        var p when p.Contains("DeepwaterChestScarabs", StringComparison.Ordinal) => IconPickerIndex.ScarabChest,
+        var p when p.Contains("DeepwaterChestStackedDecks", StringComparison.Ordinal) => IconPickerIndex.StackedDecksChest,
+        var p when p.Contains("DeepwaterChestMaps", StringComparison.Ordinal) => IconPickerIndex.MapsChest,
+        var p when p.Contains("GoldTreasureChest", StringComparison.Ordinal) => IconPickerIndex.GoldTreasureChest,
+        var p when p.Contains("DeepwaterCursedDucatDrop", StringComparison.Ordinal) => IconPickerIndex.CursedDucatDrop,
+        var p when p.Contains("RandomDucatChest", StringComparison.Ordinal) => IconPickerIndex.RandomDucatChest,
+        var p when p.Contains("DeepwaterIzaroObject", StringComparison.Ordinal) => IconPickerIndex.IzaroObject,
+        var p when p.Contains("DeepwaterAltarCrab", StringComparison.Ordinal) => IconPickerIndex.AltarCrab,
+        var p when p.Contains("DeepwaterAltarOctopus", StringComparison.Ordinal) => IconPickerIndex.AltarOctopus,
+        var p when p.Contains("DeepwaterTormentedSpiritEncounter", StringComparison.Ordinal) => IconPickerIndex.TormentedSpiritEncounter,
+        var p when p.Contains("DeepwaterLanternReplenishEncounter", StringComparison.Ordinal) => IconPickerIndex.LanternReplenishEncounter,
+        _ => IconPickerIndex.OtherChests,
+    };
 
     private Vector3 ExpandWithTerrainHeight(Vector2 gridPosition)
     {
@@ -210,16 +237,22 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
 
         _bubbleRadius = Settings.BubbleSettings.BubbleRadiusOverride.Value is > 0 and var o ? o : Bubbles.Min(x => x.Radius);
 
-        foreach (var entity in new[] { EntityType.Chest }
+        foreach (var entity in new[] { EntityType.Chest, EntityType.Terrain, EntityType.IngameIcon }
                      .SelectMany(x => GameController.EntityListWrapper.ValidEntitiesByType[x]))
         {
-            if (GetEntityType(entity.Path) != ExpeditionEntityType.None)
+            if (GetEntityType(entity.Path) == ExpeditionEntityType.None)
+                continue;
+
+            if (entity.IsOpened)
             {
-                var newValue = BuildCacheItem(entity);
-                _cachedEntities[entity.Id] = _cachedEntities.TryGetValue(entity.Id, out var oldValue)
-                    ? oldValue.Merge(newValue)
-                    : newValue;
+                _cachedEntities.Remove(entity.Id);
+                continue;
             }
+
+            var newValue = BuildCacheItem(entity);
+            _cachedEntities[entity.Id] = _cachedEntities.TryGetValue(entity.Id, out var oldValue)
+                ? oldValue.Merge(newValue)
+                : newValue;
         }
 
         return null;
@@ -232,11 +265,14 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         var loot = new List<(Vector2, IExpeditionLoot)>();
         foreach (var e in _cachedEntities.Values)
         {
+            if (e.IsOpened)
+                continue;
+
             switch (GetEntityType(e.Path))
             {
                 case ExpeditionEntityType.Marker:
                 {
-                    loot.Add((e.GridPos, new PathPlannerData.Chest(IconPickerIndex.OtherChests)));
+                    loot.Add((e.GridPos, new PathPlannerData.Chest(GetChestType(e.Path))));
                     continue;
                 }
             }
@@ -300,19 +336,25 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
 
         foreach (var e in _cachedEntities.Values)
         {
+            if (e.IsOpened)
+                continue;
+
             switch (GetEntityType(e.Path))
             {
                 case ExpeditionEntityType.Marker:
                 {
-                    var mapSettings = Settings.IconMapping.GetValueOrDefault(IconPickerIndex.OtherChests, new IconDisplaySettings());
+                    var chestType = GetChestType(e.Path);
+                    var mapSettings = Settings.IconMapping.GetValueOrDefault(chestType, new IconDisplaySettings());
+                    var icon = mapSettings.Icon ?? DeepwaterEngagementSuiteSettings.GetDefaultIcon(chestType);
+                    var tint = mapSettings.Tint ?? DeepwaterEngagementSuiteSettings.GetDefaultTint(chestType);
                     if (mapSettings.ShowOnMap)
                     {
-                        DrawIconOnMap(e, mapSettings.Icon ?? DeepwaterEngagementSuiteSettings.DefaultEliteMonsterIcon, mapSettings.Tint, Vector2.Zero);
+                        DrawIconOnMap(e, icon, tint, Vector2.Zero);
                     }
 
                     if (mapSettings.ShowInWorld)
                     {
-                        DrawIconInWorld(e, mapSettings.Icon ?? DeepwaterEngagementSuiteSettings.DefaultEliteMonsterIcon, mapSettings.Tint, Vector2.Zero);
+                        DrawIconInWorld(e, icon, tint, Vector2.Zero);
                     }
 
                     continue;
@@ -654,7 +696,8 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         Vector2 GridPos,
         float? RenderZ,
         float? RenderSize,
-        bool? MinimapIconHide)
+        bool? MinimapIconHide,
+        bool IsOpened)
     {
         public string BaseAnimatedEntityMetadata => BaseAnimatedEntityMetadataCache.Value;
 
@@ -668,17 +711,24 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
                 GridPos,
                 RenderZ ?? other.RenderZ,
                 RenderSize ?? other.RenderSize,
-                MinimapIconHide ?? MinimapIconHide);
+                MinimapIconHide ?? other.MinimapIconHide,
+                IsOpened || other.IsOpened);
         }
     }
 
-
     public override void EntityAdded(Entity entity)
     {
-        if (entity.Type is EntityType.Chest && GetEntityType(entity.Path) != ExpeditionEntityType.None)
+        if ((entity.Type is EntityType.Chest or EntityType.Terrain or EntityType.IngameIcon)
+            && GetEntityType(entity.Path) != ExpeditionEntityType.None
+            && !entity.IsOpened)
         {
             _cachedEntities[entity.Id] = BuildCacheItem(entity);
         }
+    }
+
+    public override void EntityRemoved(Entity entity)
+    {
+        _cachedEntities.Remove(entity.Id);
     }
 
     private static EntityCacheItem BuildCacheItem(Entity entity)
@@ -691,6 +741,7 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
             entity.PosNum.WorldToGrid(),
             entity.GetComponent<Render>()?.Z,
             entity.GetComponent<Render>()?.BoundsNum is { } b ? Math.Min(b.X, b.Y) : null,
-            entity.GetComponent<MinimapIcon>()?.IsHide);
+            entity.GetComponent<MinimapIcon>()?.IsHide,
+            entity.IsOpened);
     }
 }
