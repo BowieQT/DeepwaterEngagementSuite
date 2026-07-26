@@ -41,7 +41,7 @@ public class DeepwaterEngagementSuiteSettings : ISettings
 
     public BubbleSettings BubbleSettings { get; set; } = new BubbleSettings();
     public PlannerSettings PlannerSettings { get; set; } = new PlannerSettings();
-    public GenesisTreeSettings GenesisTreeSettings { get; set; } = new GenesisTreeSettings();
+    public VoyageSettings VoyageSettings { get; set; } = new VoyageSettings();
 
     public static MapIconsIndex GetDefaultIcon(IconPickerIndex index) => index switch
     {
@@ -100,6 +100,10 @@ public class PlannerSettings
     [ConditionalDisplay(nameof(HasSearchResult))]
     public ButtonNode ClearSearch { get; set; } = new ButtonNode();
     public ToggleNode PlaySoundOnFinish { get; set; } = new ToggleNode(false);
+    public ToggleNode DrawPlannedBubblesOnMap { get; set; } = new ToggleNode(true);
+    public ToggleNode DrawLinesToLanternsInWorld { get; set; } = new ToggleNode(true);
+    public RangeNode<int> ClosestNLanterns { get; set; } = new RangeNode<int>(2, 0, 10);
+    public ToggleNode MergePlannedBubbles { get; set; } = new ToggleNode(true);
 
     [Menu("Color for suggested bubble radius")]
     public ColorNode BubbleColor { get; set; } = new ColorNode(Color.Purple);
@@ -116,7 +120,7 @@ public class PlannerSettings
     [Menu(null, "Do not show lines/circles for plan segments where a real bubble has already been placed")]
     public ToggleNode RemoveGraphicsForPlacedBubbles { get; set; } = new ToggleNode(false);
 
-    public RangeNode<float> TextMarkerScale { get; set; } = new RangeNode<float>(1, 0, 5);
+    public RangeNode<float> TextMarkerScale { get; set; } = new RangeNode<float>(2, 0, 5);
 
     public RangeNode<float> MaximumGenerationTimeSeconds { get; set; } = new RangeNode<float>(5, 0, 60);
     public RangeNode<int> SearchThreads { get; set; } = new RangeNode<int>(5, 1, 10);
@@ -159,10 +163,12 @@ public class BubbleSettings
 
     [Menu("Rectangle Thickness for captured entities on map")]
     public RangeNode<int> CapturedEntityMapFrameThickness { get; set; } = new RangeNode<int>(2, 1, 20);
+
+    public ToggleNode MarkStartingBubble { get; set; } = new ToggleNode(true);
 }
 
 [Submenu(CollapsedByDefault = true)]
-public class GenesisTreeSettings
+public class VoyageSettings
 {
     public ToggleNode Enable { get; set; } = new ToggleNode(true);
 

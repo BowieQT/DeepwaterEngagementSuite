@@ -46,6 +46,8 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
     private List<Vector2i> _editedPath;
     private int? _editedIndex = null;
     private PathPlanner.DetailedLootScore _editedPathEval;
+    private Polygon _placedBubblePolygon;
+
     private PathPlanner.DetailedLootScore EditedOrNativeScore => _editedPathEval ?? _plannerRunner?.CurrentBestPath;
 
     private Camera Camera => GameController.Game.IngameState.Camera;
@@ -123,6 +125,7 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         _zoneCleared = false;
         _pathfindingData = GameController.IngameState.Data.RawPathfindingData;
         _areaDimensions = GameController.IngameState.Data.AreaDimensions;
+        _shapeCache.Clear();
     }
 
     private ExpeditionEntityType GetEntityType(string path)
@@ -299,7 +302,7 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
 
     public override void Render()
     {
-        DrawGenesisTreeHighlights();
+        DrawVoyageHighlights();
 
         if (Handler == null)
         {
@@ -310,12 +313,22 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         {
             if (Bubbles is { Count: > 0 } bubbles)
             {
-                var agg = _shapeCache.GetOrAdd(bubbles.ToHashSet(), a => a.Select(x => GetCirclePolygon(x.Item1, x.Item2)).Aggregate(PolygonClipper.Union));
-                foreach (var cont in agg)
+                _placedBubblePolygon = _shapeCache.GetOrAdd(bubbles.ToHashSet(), a => a.Select(x => GetCirclePolygon(x.Item1, x.Item2)).Aggregate(PolygonClipper.Union));
+                foreach (var cont in _placedBubblePolygon)
                 {
                     var a = cont.Select(v => Graphics.GridToMap(new Vector2((float)v.X, (float)v.Y), _playerGridPos)).ToList();
                     Graphics.DrawPolyLine(a.ToArray(), Settings.BubbleSettings.BubbleColor.Value, 2);
                 }
+            }
+        }
+
+        if (Settings.BubbleSettings.MarkStartingBubble)
+        {
+            foreach (var entity in GameController.EntityListWrapper.ValidEntitiesByType[EntityType.IngameIcon]
+                         .Where(x => x.Path == "Metadata/Terrain/Leagues/Deepwater/Objects/ExtractionObject"))
+            {
+                var pos = Graphics.GridToMap(entity.PosNum);
+                Graphics.DrawTextWithBackground("Start", pos, Color.Black);
             }
         }
         
@@ -371,36 +384,31 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         {
             var path = score.PerPointScore;
             var placedBubblePositions = Bubbles.Select(x=>x.Position).ToHashSet();
-            var firstPoint = Bubbles.First().Position;
-            var prevPoint = firstPoint;
             var usedPath = (Settings.PlannerSettings.RemoveGraphicsForPlacedBubbles
                 ? path
                 : path.Where(x => !placedBubblePositions.Contains(x.Point))).DistinctBy(x => x.Point).ToDictionary(x => x.Point);
+            var usedPathLines = usedPath.OrderBy(x => x.Key.DistanceSqr(_playerGridPos.TruncateToVector2I())).Take(Settings.PlannerSettings.ClosestNLanterns)
+                .Select(x => x.Key).ToHashSet();
             for (var i = 0; i < path.Count; i++)
             {
                 var point = path[i].Point;
                 if (!usedPath.ContainsKey(point))
                 {
-                    prevPoint = point;
                     continue;
                 }
 
-                var lineWidth = PlacedLanternCount == i ? 3 : 1;
-                if (_largeMapOpen)
+                var worldPos = GetWorldScreenPosition(point);
+                if (Settings.PlannerSettings.DrawLinesToLanternsInWorld && usedPathLines.Contains(point))
                 {
-                    Graphics.DrawLine(Graphics.GridToMap(prevPoint, _playerGridPos), Graphics.GridToMap(point, _playerGridPos), lineWidth, Settings.PlannerSettings.MapLineColor);
+                    Graphics.DrawLine(GetWorldScreenPosition(_playerGridPos), worldPos, 1, Settings.PlannerSettings.WorldLineColor);
                 }
 
-                var worldPos = GetWorldScreenPosition(point);
-                Graphics.DrawLine(GetWorldScreenPosition(prevPoint), worldPos, lineWidth, Settings.PlannerSettings.WorldLineColor);
                 var text = $"#{i}";
                 using (Graphics.SetTextScale(Settings.PlannerSettings.TextMarkerScale))
                 {
                     Graphics.DrawBox(worldPos, worldPos + Graphics.MeasureText(text), Color.Black);
-                    Graphics.DrawText(text, worldPos, Color.White);
+                    Graphics.DrawText(text, worldPos, Settings.PlannerSettings.BubbleColor.Value);
                 }
-
-                prevPoint = point;
             }
 
             if (Settings.PlannerSettings.IsSearchRunning)
@@ -410,15 +418,58 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
 
             ShowSearchWindow(score);
 
-            foreach (var point in usedPath)
+            Polygon plannedPoly = null;
+            if (Settings.PlannerSettings.MergePlannedBubbles)
             {
-                Graphics.DrawCircleOnMap(point.Key, false, _bubbleRadius, Settings.PlannerSettings.BubbleColor.Value, 2, 100);
+                plannedPoly = _shapeCache.GetOrAdd(usedPath.Keys.Select(x => (x, _bubbleRadius)).ToHashSet(),
+                    a => a.Select(x => GetCirclePolygon(x.Item1, x.Item2)).Aggregate(PolygonClipper.Union));
+                if (_placedBubblePolygon != null)
+                    plannedPoly = PolygonClipper.Difference(plannedPoly, _placedBubblePolygon);
+              
             }
 
-            DrawCirclesInWorld(
-                positions: usedPath.Select(x => ExpandWithTerrainHeight(x.Key)).ToList(),
-                radius: _bubbleRadius * GridToWorldMultiplier,
-                color: Settings.PlannerSettings.BubbleColor.Value);
+            if (Settings.PlannerSettings.DrawPlannedBubblesOnMap)
+            {
+                if (plannedPoly != null)
+                {
+                    var excludedVertices = (_placedBubblePolygon?.SelectMany(p => p) ?? []).ToHashSet();
+
+                    IEnumerable<List<Vertex>> Segment(Contour cont)
+                    {
+                        var current = new List<Vertex>();
+                        foreach (var v in cont)
+                        {
+                            if (excludedVertices.Contains(v))
+                            {
+                                if (current.Any())
+                                {
+                                    yield return current;
+                                    current = [];
+                                }
+                            }
+                            else
+                            {
+                                current.Add(v);
+                            }
+                        }
+
+                        if (current.Any())
+                        {
+                            yield return current;
+                        }
+                    }
+
+                    foreach (var cont in plannedPoly.SelectMany(Segment))
+                    {
+                        var a = cont.Select(v => Graphics.GridToMap(new Vector2((float)v.X, (float)v.Y), _playerGridPos)).ToArray();
+                        Graphics.DrawPolyLine(a, Settings.PlannerSettings.BubbleColor.Value, 2);
+                    }
+                }
+                else foreach (var point in usedPath)
+                {
+                    Graphics.DrawCircleOnMap(point.Key, false, _bubbleRadius, Settings.PlannerSettings.BubbleColor.Value, 2, 100);
+                }
+            }
 
             if (PlacementIndicatorPos is { } markerPos)
             {
@@ -612,10 +663,10 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
     private static readonly Regex PoETagRegex = new(@"<[^>]+>\{([^}]*)\}|<\/?[^>]+>", RegexOptions.Compiled);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
 
-    // DevTree: (GenesisTreeWindow)34->3->10 — 34 is window IndexInParent; relative path is 3->10.
-    private static readonly int[] GenesisTreeNodeContainerPath = [3, 10];
+    // DevTree: (VoyageWindow)34->3->10 — 34 is window IndexInParent; relative path is 3->10.
+    private static readonly int[] VoyageNodeContainerPath = [3, 10];
 
-    private static readonly (string MatchText, string ShortName, Func<GenesisTreeSettings, bool> IsEnabled)[] GenesisTreeHighlightRules =
+    private static readonly (string MatchText, string ShortName, Func<VoyageSettings, bool> IsEnabled)[] VoyageHighlightRules =
     [
         ("Rare Monsters in adjacent Areas drop an additional Divine Orb", "Divine Orb (adjacent rares)", s => s.HighlightDivineOrbAdjacentRares),
         ("Players in adjacent Areas gain 200% increased Experience", "200% XP (adjacent)", s => s.HighlightAdjacentAreaXp),
@@ -626,16 +677,16 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         ("100% more Scarabs found in adjacent Areas", "100% more Scarabs", s => s.HighlightMoreScarabsAdjacent),
     ];
 
-    private void DrawGenesisTreeHighlights()
+    private void DrawVoyageHighlights()
     {
-        var settings = Settings.GenesisTreeSettings;
+        var settings = Settings.VoyageSettings;
         if (!settings.Enable)
             return;
 
         Element tree;
         try
         {
-            tree = GameController?.IngameState?.IngameUi?.GenesisTreeWindow;
+            tree = GameController?.IngameState?.IngameUi?.VoyageWindow;
         }
         catch
         {
@@ -647,7 +698,7 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         if (!tree.IsVisible && !tree.IsVisibleLocal)
             return;
 
-        var activeRules = GenesisTreeHighlightRules.Where(r => r.IsEnabled(settings)).ToArray();
+        var activeRules = VoyageHighlightRules.Where(r => r.IsEnabled(settings)).ToArray();
         if (activeRules.Length == 0)
             return;
 
@@ -675,8 +726,8 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
             var lines = new List<string>();
             if (settings.ShowDebugStatus)
             {
-                var container = SafeGetChildFromIndices(tree, GenesisTreeNodeContainerPath);
-                lines.Add($"Genesis Tree: scanned={scanned} matches={matchedShortNames.Count} path3->10 kids={SafeChildCount(container)}");
+                var container = SafeGetChildFromIndices(tree, VoyageNodeContainerPath);
+                lines.Add($"Voyage Tree: scanned={scanned} matches={matchedShortNames.Count} path3->10 kids={SafeChildCount(container)}");
             }
 
             if (settings.ShowMatchNotifier && matchedShortNames.Count > 0)
@@ -687,14 +738,14 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
             }
 
             if (lines.Count > 0)
-                DrawGenesisOverlay(lines, matchedShortNames.Count > 0 ? color : Color.White);
+                DrawVoyageOverlay(lines, matchedShortNames.Count > 0 ? color : Color.White);
         }
     }
 
     private void TryHighlightMatch(
         Element el,
         string blob,
-        (string MatchText, string ShortName, Func<GenesisTreeSettings, bool> IsEnabled)[] activeRules,
+        (string MatchText, string ShortName, Func<VoyageSettings, bool> IsEnabled)[] activeRules,
         Color color,
         int thickness,
         List<string> matchedShortNames)
@@ -835,7 +886,7 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
         }
     }
 
-    private void DrawGenesisOverlay(IReadOnlyList<string> lines, Color accent)
+    private void DrawVoyageOverlay(IReadOnlyList<string> lines, Color accent)
     {
         if (lines == null || lines.Count == 0)
             return;

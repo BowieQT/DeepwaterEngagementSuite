@@ -134,7 +134,15 @@ public class PathPlanner
         {
             count--;
             var candidatePoints = polygon.SelectMany(p => p).ToList();
-            var point = candidatePoints[Random.Shared.Next(candidatePoints.Count)];
+            var point = new Vertex(0, 0);
+            for (int i = 0; i < 100; i++)
+            {
+                point = candidatePoints[Random.Shared.Next(candidatePoints.Count)];
+                if (environment.IsValidPlacement(new Vector2((float)point.X, (float)point.Y)))
+                {
+                    break;
+                }
+            }
             polygon = PolygonClipper.Union(polygon,(DeepwaterEngagementSuite.GetCirclePolygon(new Vector2((int)point.X, (int)point.Y), environment.BubbleRadius)));
             points.Add(new Vector2i((int)point.X,(int)point.Y));
         }
