@@ -22,6 +22,8 @@ public class DeepwaterEngagementSuiteSettings : ISettings
     public const MapIconsIndex DefaultScarabChestIcon = MapIconsIndex.RewardScarabs;
     public const MapIconsIndex DefaultStackedDecksChestIcon = MapIconsIndex.RewardDivinationCards;
     public const MapIconsIndex DefaultMapsChestIcon = MapIconsIndex.RewardMaps;
+    // Small glowing orb (Allflame-style); not Essence.
+    public const MapIconsIndex DefaultAllflameEmbersChestIcon = MapIconsIndex.SanctumGoldConvert;
     public const MapIconsIndex DefaultCursedDucatDropIcon = MapIconsIndex.RewardPerandus;
     public const MapIconsIndex DefaultIzaroObjectIcon = MapIconsIndex.RewardLabyrinth;
     public const MapIconsIndex DefaultAltarCrabIcon = MapIconsIndex.RewardBestiary;
@@ -51,6 +53,7 @@ public class DeepwaterEngagementSuiteSettings : ISettings
         IconPickerIndex.ScarabChest => DefaultScarabChestIcon,
         IconPickerIndex.StackedDecksChest => DefaultStackedDecksChestIcon,
         IconPickerIndex.MapsChest => DefaultMapsChestIcon,
+        IconPickerIndex.AllflameEmbersChest => DefaultAllflameEmbersChestIcon,
         IconPickerIndex.CursedDucatDrop => DefaultCursedDucatDropIcon,
         IconPickerIndex.RandomDucatChest => DefaultCursedDucatDropIcon,
         IconPickerIndex.IzaroObject => DefaultIzaroObjectIcon,

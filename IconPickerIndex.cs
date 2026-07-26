@@ -16,6 +16,7 @@ public enum IconPickerIndex
     ScarabChest,
     StackedDecksChest,
     MapsChest,
+    AllflameEmbersChest,
     CursedDucatDrop,
     RandomDucatChest,
     IzaroObject,
