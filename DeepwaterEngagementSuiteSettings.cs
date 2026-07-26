@@ -41,6 +41,7 @@ public class DeepwaterEngagementSuiteSettings : ISettings
 
     public BubbleSettings BubbleSettings { get; set; } = new BubbleSettings();
     public PlannerSettings PlannerSettings { get; set; } = new PlannerSettings();
+    public GenesisTreeSettings GenesisTreeSettings { get; set; } = new GenesisTreeSettings();
 
     public static MapIconsIndex GetDefaultIcon(IconPickerIndex index) => index switch
     {
@@ -158,6 +159,42 @@ public class BubbleSettings
 
     [Menu("Rectangle Thickness for captured entities on map")]
     public RangeNode<int> CapturedEntityMapFrameThickness { get; set; } = new RangeNode<int>(2, 1, 20);
+}
+
+[Submenu(CollapsedByDefault = true)]
+public class GenesisTreeSettings
+{
+    public ToggleNode Enable { get; set; } = new ToggleNode(true);
+
+    [Menu("Highlight color")]
+    public ColorNode HighlightColor { get; set; } = new ColorNode(Color.Gold);
+
+    [Menu("Frame thickness")]
+    public RangeNode<int> FrameThickness { get; set; } = new RangeNode<int>(3, 1, 12);
+
+    [Menu("Show match notifier", "On-screen list of highlighted mods while the Genesis Tree is open")]
+    public ToggleNode ShowMatchNotifier { get; set; } = new ToggleNode(true);
+
+    [Menu("Show debug status", "Shows path/node/tooltip/match counts while the tree is open")]
+    public ToggleNode ShowDebugStatus { get; set; } = new ToggleNode(true);
+
+    [Menu("Debug: frame all nodes", "Draw a dim frame around every scanned node (for path/tooltip diagnosis)")]
+    public ToggleNode DebugFrameAllNodes { get; set; } = new ToggleNode(false);
+
+    [Menu("Divine Orb adjacent rares", "Rare Monsters in adjacent Areas drop an additional Divine Orb")]
+    public ToggleNode HighlightDivineOrbAdjacentRares { get; set; } = new ToggleNode(true);
+
+    [Menu("200% XP adjacent areas", "Players in adjacent Areas gain 200% increased Experience")]
+    public ToggleNode HighlightAdjacentAreaXp { get; set; } = new ToggleNode(true);
+
+    [Menu("Captainsbane adjacent areas", "Adjacent Areas contain Captainsbane")]
+    public ToggleNode HighlightCaptainsbane { get; set; } = new ToggleNode(true);
+
+    [Menu("Filthscrabble adjacent areas", "Adjacent Areas contain Filthscrabble")]
+    public ToggleNode HighlightFilthscrabble { get; set; } = new ToggleNode(true);
+
+    [Menu("Stacked Decks from basic currency", "Basic Currency items dropped by Monsters in adjacent Areas will instead drop as Stacked Decks")]
+    public ToggleNode HighlightStackedDecksFromBasicCurrency { get; set; } = new ToggleNode(true);
 }
 
 public enum SearchState

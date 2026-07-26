@@ -3,10 +3,12 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 using DeepwaterEngagementSuite.PathPlannerData;
 using ExileCore;
+using ExileCore.PoEMemory;
 using ExileCore.PoEMemory.Components;
 using ExileCore.PoEMemory.Elements;
 using ExileCore.PoEMemory.MemoryObjects;
@@ -297,6 +299,8 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
 
     public override void Render()
     {
+        DrawGenesisTreeHighlights();
+
         if (Handler == null)
         {
             return;
@@ -603,6 +607,495 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
                 new Vector2(0, ImGui.GetContentRegionAvail().Y));
             ImGui.End();
         }
+    }
+
+    private static readonly Regex PoETagRegex = new(@"<[^>]+>\{([^}]*)\}|<\/?[^>]+>", RegexOptions.Compiled);
+
+    // DevTree shows (GenesisTreeWindow)34->3->10 where 34 is the window's IndexInParent.
+    // Relative to IngameUi.GenesisTreeWindow the node list is 3->10.
+    private static readonly int[] GenesisTreeNodeContainerPath = [3, 10];
+
+    private static readonly (string MatchText, string ShortName, Func<GenesisTreeSettings, bool> IsEnabled)[] GenesisTreeHighlightRules =
+    [
+        ("Rare Monsters in adjacent Areas drop an additional Divine Orb", "Divine Orb (adjacent rares)", s => s.HighlightDivineOrbAdjacentRares),
+        ("Players in adjacent Areas gain 200% increased Experience", "200% XP (adjacent)", s => s.HighlightAdjacentAreaXp),
+        ("Adjacent Areas contain Captainsbane", "Captainsbane", s => s.HighlightCaptainsbane),
+        ("Adjacent Areas contain Filthscrabble", "Filthscrabble", s => s.HighlightFilthscrabble),
+        ("Basic Currency items dropped by Monsters in adjacent Areas will instead drop as Stacked Decks", "Stacked Decks from basic currency", s => s.HighlightStackedDecksFromBasicCurrency),
+    ];
+
+    private void DrawGenesisTreeHighlights()
+    {
+        var settings = Settings.GenesisTreeSettings;
+        if (!settings.Enable)
+            return;
+
+        Element tree;
+        try
+        {
+            tree = GameController?.IngameState?.IngameUi?.GenesisTreeWindow;
+        }
+        catch
+        {
+            return;
+        }
+
+        if (tree is not { IsValid: true })
+            return;
+
+        if (!tree.IsVisible && !tree.IsVisibleLocal)
+            return;
+
+        var activeRules = GenesisTreeHighlightRules.Where(r => r.IsEnabled(settings)).ToArray();
+        var color = settings.HighlightColor.Value;
+        var thickness = settings.FrameThickness.Value;
+        var debugDim = new Color(color.R, color.G, color.B, (byte)80);
+
+        // Prefer DevTree-relative path 3->10; also scan passives + full window.
+        var nodeContainer = SafeGetChildFromIndices(tree, GenesisTreeNodeContainerPath);
+        var pathLabel = nodeContainer is { IsValid: true }
+            ? string.Join("->", GenesisTreeNodeContainerPath)
+            : "full-window";
+
+        var scanned = 0;
+        var withText = 0;
+        var passiveCount = 0;
+        var adjacentHits = 0;
+        var matchedShortNames = new List<string>();
+        var textSamples = new List<string>();
+        var passiveNameSamples = new List<string>();
+        var seenAddresses = new HashSet<long>();
+
+        void Consider(Element el, string passiveName)
+        {
+            if (el is not { IsValid: true })
+                return;
+            if (!seenAddresses.Add(el.Address))
+                return;
+
+            scanned++;
+            var blob = BuildMatchBlob(el, passiveName);
+            if (string.IsNullOrWhiteSpace(blob))
+                return;
+
+            withText++;
+            if (blob.Contains("adjacent Areas", StringComparison.OrdinalIgnoreCase))
+                adjacentHits++;
+
+            MaybeAddTextSample(textSamples, blob);
+            TryHighlightMatch(el, blob, activeRules, color, thickness, debugDim, settings.DebugFrameAllNodes, matchedShortNames);
+        }
+
+        // 1) Explicit container children (user DevTree path, relative).
+        if (nodeContainer is { IsValid: true })
+        {
+            foreach (var el in EnumerateDirectAndNestedCandidates(nodeContainer))
+                Consider(el, null);
+        }
+
+        // 2) TreePassiveElement nodes (skill data without hover tooltips).
+        foreach (var passiveEl in EnumerateTreePassives(tree))
+        {
+            passiveCount++;
+            string passiveName = null;
+            try
+            {
+                passiveName = passiveEl.PassiveSkill?.Name;
+            }
+            catch
+            {
+                // ignored
+            }
+
+            if (!string.IsNullOrWhiteSpace(passiveName) && passiveNameSamples.Count < 6)
+                passiveNameSamples.Add(TruncateForDebug(passiveName));
+
+            Consider(passiveEl, passiveName);
+        }
+
+        // 3) Full-window scan for remaining text/tooltip matches.
+        foreach (var el in EnumerateDescendants(tree, maxDepth: 14))
+            Consider(el, null);
+
+        if (settings.ShowDebugStatus || (settings.ShowMatchNotifier && matchedShortNames.Count > 0))
+        {
+            var lines = new List<string>();
+            if (settings.ShowDebugStatus)
+            {
+                lines.Add($"Genesis Tree: path={pathLabel} scanned={scanned} texts={withText} passives={passiveCount}");
+                lines.Add($"matches={matchedShortNames.Count} adjacentHits={adjacentHits} containerKids={SafeChildCount(nodeContainer)}");
+                if (passiveNameSamples.Count > 0)
+                    lines.Add("passives: " + string.Join(" | ", passiveNameSamples));
+                foreach (var sample in textSamples.Take(4))
+                    lines.Add($"  text: {sample}");
+                if (withText > 0 && adjacentHits == 0 && matchedShortNames.Count == 0)
+                    lines.Add("Seeing chart tips only — hover a good passive or open passive view.");
+            }
+
+            if (settings.ShowMatchNotifier && matchedShortNames.Count > 0)
+            {
+                lines.Add("Highlighted:");
+                foreach (var name in matchedShortNames)
+                    lines.Add($"  • {name}");
+            }
+
+            if (lines.Count > 0)
+                DrawGenesisOverlay(lines, matchedShortNames.Count > 0 ? color : Color.White);
+        }
+    }
+
+    private void TryHighlightMatch(
+        Element el,
+        string blob,
+        (string MatchText, string ShortName, Func<GenesisTreeSettings, bool> IsEnabled)[] activeRules,
+        Color color,
+        int thickness,
+        Color debugDim,
+        bool debugFrameAll,
+        List<string> matchedShortNames)
+    {
+        var rect = GetElementRect(el);
+        if (rect.Width <= 1 || rect.Height <= 1)
+            return;
+
+        if (debugFrameAll)
+            Graphics.DrawFrame(rect, debugDim, Math.Max(1, thickness - 1));
+
+        if (activeRules.Length == 0)
+            return;
+
+        var plain = StripPoETags(blob);
+        foreach (var rule in activeRules)
+        {
+            if (!TextMatchesRule(plain, blob, rule.MatchText))
+                continue;
+
+            Graphics.DrawFrame(rect, color, thickness);
+            Graphics.DrawBox(rect, new Color(color.R, color.G, color.B, (byte)40));
+            if (!matchedShortNames.Contains(rule.ShortName))
+                matchedShortNames.Add(rule.ShortName);
+            break;
+        }
+    }
+
+    private static bool TextMatchesRule(string plain, string raw, string matchText)
+    {
+        if (string.IsNullOrEmpty(matchText))
+            return false;
+
+        if ((!string.IsNullOrEmpty(plain) && plain.Contains(matchText, StringComparison.OrdinalIgnoreCase)) ||
+            (!string.IsNullOrEmpty(raw) && raw.Contains(matchText, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        var tagged = "<augmented>{" + matchText + "}";
+        return (!string.IsNullOrEmpty(raw) && raw.Contains(tagged, StringComparison.OrdinalIgnoreCase)) ||
+               (!string.IsNullOrEmpty(plain) && plain.Contains(tagged, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string BuildMatchBlob(Element el, string passiveName)
+    {
+        var parts = new List<string>();
+        AppendIfText(parts, passiveName);
+
+        try
+        {
+            AppendIfText(parts, el.Text);
+            AppendIfText(parts, el.TextNoTags);
+            if (el.Children != null)
+            {
+                foreach (var child in el.Children)
+                {
+                    AppendIfText(parts, child?.Text);
+                    AppendIfText(parts, child?.TextNoTags);
+                }
+            }
+        }
+        catch
+        {
+            // ignored
+        }
+
+        AppendIfText(parts, CollectTooltipTextDeep(el));
+        return parts.Count == 0 ? null : string.Join("\n", parts);
+    }
+
+    private static IEnumerable<Element> EnumerateDirectAndNestedCandidates(Element container)
+    {
+        if (container?.Children == null)
+            yield break;
+
+        foreach (var child in container.Children)
+        {
+            if (child is not { IsValid: true })
+                continue;
+
+            yield return child;
+
+            if (child.Children == null)
+                continue;
+
+            foreach (var grand in child.Children)
+            {
+                if (grand is { IsValid: true })
+                    yield return grand;
+            }
+        }
+    }
+
+    private static IEnumerable<Element> EnumerateDescendants(Element root, int maxDepth)
+    {
+        if (root is not { IsValid: true })
+            yield break;
+
+        var stack = new Stack<(Element El, int Depth)>();
+        stack.Push((root, 0));
+        while (stack.Count > 0)
+        {
+            var (el, depth) = stack.Pop();
+            if (depth > 0)
+                yield return el;
+
+            if (depth >= maxDepth || el.Children == null)
+                continue;
+
+            try
+            {
+                foreach (var child in el.Children)
+                {
+                    if (child is { IsValid: true })
+                        stack.Push((child, depth + 1));
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+    }
+
+    private static IEnumerable<TreePassiveElement> EnumerateTreePassives(Element root)
+    {
+        if (root is not { IsValid: true })
+            yield break;
+
+        var stack = new Stack<(Element El, int Depth)>();
+        stack.Push((root, 0));
+        while (stack.Count > 0)
+        {
+            var (el, depth) = stack.Pop();
+            if (depth > 16)
+                continue;
+
+            TreePassiveElement passive = null;
+            try
+            {
+                var candidate = el.AsObject<TreePassiveElement>();
+                if (candidate?.PassiveSkill is { Address: > 0 })
+                    passive = candidate;
+            }
+            catch
+            {
+                // ignored
+            }
+
+            if (passive != null)
+                yield return passive;
+
+            try
+            {
+                if (el.Children == null)
+                    continue;
+                foreach (var child in el.Children)
+                {
+                    if (child is { IsValid: true })
+                        stack.Push((child, depth + 1));
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+    }
+
+    private static void MaybeAddTextSample(List<string> samples, string blob)
+    {
+        if (samples.Count >= 4 || string.IsNullOrWhiteSpace(blob))
+            return;
+
+        var plain = StripPoETags(blob);
+        var interesting = plain.Contains("adjacent", StringComparison.OrdinalIgnoreCase)
+                          || plain.Contains("Divine", StringComparison.OrdinalIgnoreCase)
+                          || plain.Contains("Experience", StringComparison.OrdinalIgnoreCase)
+                          || plain.Contains("Captainsbane", StringComparison.OrdinalIgnoreCase)
+                          || plain.Contains("Filthscrabble", StringComparison.OrdinalIgnoreCase)
+                          || plain.Contains("Stacked Deck", StringComparison.OrdinalIgnoreCase);
+
+        if (!interesting && samples.Count >= 2)
+            return;
+
+        samples.Add(TruncateForDebug(plain));
+    }
+
+    private static string TruncateForDebug(string text)
+    {
+        var sample = text.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        return sample.Length > 90 ? sample[..90] + "…" : sample;
+    }
+
+    private void DrawGenesisOverlay(IReadOnlyList<string> lines, Color accent)
+    {
+        if (lines == null || lines.Count == 0)
+            return;
+
+        const float pad = 6f;
+        const float lineH = 18f;
+        var x = 20f;
+        var y = 120f;
+        var maxWidth = 0f;
+        foreach (var line in lines)
+            maxWidth = Math.Max(maxWidth, Graphics.MeasureText(line).X);
+
+        var box = new RectangleF(x - pad, y - pad, maxWidth + pad * 2, lines.Count * lineH + pad * 2);
+        Graphics.DrawBox(box, new Color(0, 0, 0, 180));
+        Graphics.DrawFrame(box, accent, 2);
+
+        for (var i = 0; i < lines.Count; i++)
+            Graphics.DrawText(lines[i], new Vector2(x, y + i * lineH), Color.White);
+    }
+
+    private static Element SafeGetChildFromIndices(Element root, params int[] indices)
+    {
+        if (root == null || indices == null)
+            return null;
+
+        try
+        {
+            var current = root;
+            foreach (var index in indices)
+            {
+                if (current?.Children == null || index < 0 || index >= current.Children.Count)
+                    return null;
+                current = current.Children[index];
+                if (current is not { IsValid: true })
+                    return null;
+            }
+
+            return current;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static int SafeChildCount(Element element)
+    {
+        try
+        {
+            return element?.Children?.Count ?? 0;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private static RectangleF GetElementRect(Element element)
+    {
+        try
+        {
+            var rect = element.GetClientRectCache;
+            if (rect.Width > 1 && rect.Height > 1)
+                return rect;
+        }
+        catch
+        {
+            // ignored
+        }
+
+        return default;
+    }
+
+    private static string CollectTooltipTextDeep(Element element)
+    {
+        if (element == null)
+            return null;
+
+        Element tooltip;
+        try
+        {
+            tooltip = element.Tooltip;
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (tooltip is not { IsValid: true })
+            return null;
+
+        var parts = new List<string>();
+        CollectElementTextRecursive(tooltip, parts, 0, 12);
+        return parts.Count == 0 ? null : string.Join("\n", parts);
+    }
+
+    private static void CollectElementTextRecursive(Element element, List<string> parts, int depth, int maxDepth)
+    {
+        if (element is not { IsValid: true } || depth > maxDepth)
+            return;
+
+        try
+        {
+            AppendIfText(parts, element.Text);
+            AppendIfText(parts, element.TextNoTags);
+
+            try
+            {
+                AppendIfText(parts, element.GetText(2048));
+                AppendIfText(parts, element.GetTextWithNoTags(2048));
+            }
+            catch
+            {
+                // ignored
+            }
+
+            if (element.Children == null)
+                return;
+
+            foreach (var child in element.Children)
+                CollectElementTextRecursive(child, parts, depth + 1, maxDepth);
+        }
+        catch
+        {
+            // ignored
+        }
+    }
+
+    private static void AppendIfText(List<string> parts, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return;
+        if (parts.Contains(text))
+            return;
+        parts.Add(text);
+    }
+
+    private static string StripPoETags(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        var previous = text;
+        for (var i = 0; i < 8; i++)
+        {
+            var next = PoETagRegex.Replace(previous, "$1");
+            if (next == previous)
+                break;
+            previous = next;
+        }
+
+        return previous;
     }
 
     private static Vector4 GetCompareColor(double @new, double old)
