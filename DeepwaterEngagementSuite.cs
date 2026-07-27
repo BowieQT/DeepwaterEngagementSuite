@@ -3,15 +3,18 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using DeepwaterEngagementSuite.PathPlannerData;
+using DeepwaterEngagementSuite.VoyagePlannerData;
 using ExileCore;
 using ExileCore.PoEMemory;
 using ExileCore.PoEMemory.Components;
 using ExileCore.PoEMemory.Elements;
+using ExileCore.PoEMemory.Elements.InventoryElements;
 using ExileCore.PoEMemory.MemoryObjects;
+using ExileCore.Shared;
 using ExileCore.Shared.Enums;
 using ExileCore.Shared.Helpers;
 using ExileCore.Shared.Nodes;
@@ -19,13 +22,14 @@ using GameOffsets.Native;
 using ImGuiNET;
 using SharpDX;
 using SixLabors.PolygonClipper;
+using Direction = DeepwaterEngagementSuite.VoyagePlannerData.Direction;
 using Vector2 = System.Numerics.Vector2;
 using Vector3 = System.Numerics.Vector3;
 using Vector4 = System.Numerics.Vector4;
 
 namespace DeepwaterEngagementSuite;
 
-public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSuiteSettings>
+public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSuiteSettings>
 {
     private readonly ConcurrentDictionary<HashSet<(Vector2i, float)>, Polygon> _shapeCache = new(HashSet<(Vector2i,float)>.CreateSetComparer());
 
@@ -58,9 +62,11 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
     private Vector2i? PlacementIndicatorPos => Handler.PlacementIndicator?.GridPosNum.TruncateToVector2I();
 
     private DeepwaterHandler Handler => GameController.IngameState.ServerData.DeepwaterHandler;
+    private bool _initialized;
 
     public override bool Initialise()
     {
+        InitOnce();
         Graphics.InitImage(TextureName);
         Settings.PlannerSettings.StartSearch.OnPressed += StartSearch;
         Settings.PlannerSettings.StopSearch.OnPressed += StopSearch;
@@ -658,368 +664,6 @@ public class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEngagementSu
                 new Vector2(0, ImGui.GetContentRegionAvail().Y));
             ImGui.End();
         }
-    }
-
-    private static readonly Regex PoETagRegex = new(@"<[^>]+>\{([^}]*)\}|<\/?[^>]+>", RegexOptions.Compiled);
-    private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
-
-    // DevTree: (VoyageWindow)34->3->10 — 34 is window IndexInParent; relative path is 3->10.
-    private static readonly int[] VoyageNodeContainerPath = [3, 10];
-
-    private static readonly (string MatchText, string ShortName, Func<VoyageSettings, bool> IsEnabled)[] VoyageHighlightRules =
-    [
-        ("Rare Monsters in adjacent Areas drop an additional Divine Orb", "Divine Orb (adjacent rares)", s => s.HighlightDivineOrbAdjacentRares),
-        ("Players in adjacent Areas gain 200% increased Experience", "200% XP (adjacent)", s => s.HighlightAdjacentAreaXp),
-        ("Adjacent Areas contain Captainsbane", "Captainsbane", s => s.HighlightCaptainsbane),
-        ("Basic Currency items dropped by Monsters in adjacent Areas will instead drop as Stacked Decks", "Stacked Decks from basic currency", s => s.HighlightStackedDecksFromBasicCurrency),
-        ("Adjacent Areas contain 2 additional Treasure Anchors", "2 Treasure Anchors", s => s.HighlightTwoTreasureAnchors),
-        ("Adjacent Areas contain 4 additional Treasure Anchors", "4 Treasure Anchors", s => s.HighlightFourTreasureAnchors),
-        ("100% more Scarabs found in adjacent Areas", "100% more Scarabs", s => s.HighlightMoreScarabsAdjacent),
-    ];
-
-    private void DrawVoyageHighlights()
-    {
-        var settings = Settings.VoyageSettings;
-        if (!settings.Enable)
-            return;
-
-        Element tree;
-        try
-        {
-            tree = GameController?.IngameState?.IngameUi?.VoyageWindow;
-        }
-        catch
-        {
-            return;
-        }
-
-        if (tree is not { IsValid: true })
-            return;
-        if (!tree.IsVisible && !tree.IsVisibleLocal)
-            return;
-
-        var activeRules = VoyageHighlightRules.Where(r => r.IsEnabled(settings)).ToArray();
-        if (activeRules.Length == 0)
-            return;
-
-        var color = Color.Cyan;
-        var thickness = settings.LineThickness.Value;
-        var matchedShortNames = new List<string>();
-        var seenAddresses = new HashSet<long>();
-        var scanned = 0;
-
-        foreach (var el in EnumerateDescendants(tree, maxDepth: 14))
-        {
-            if (el is not { IsValid: true } || !seenAddresses.Add(el.Address))
-                continue;
-
-            scanned++;
-            var blob = BuildMatchBlob(el);
-            if (string.IsNullOrWhiteSpace(blob))
-                continue;
-
-            TryHighlightMatch(el, blob, activeRules, color, thickness, matchedShortNames);
-        }
-
-        if (settings.ShowDebugStatus || (settings.ShowMatchNotifier && matchedShortNames.Count > 0))
-        {
-            var lines = new List<string>();
-            if (settings.ShowDebugStatus)
-            {
-                var container = SafeGetChildFromIndices(tree, VoyageNodeContainerPath);
-                lines.Add($"Voyage Tree: scanned={scanned} matches={matchedShortNames.Count} path3->10 kids={SafeChildCount(container)}");
-            }
-
-            if (settings.ShowMatchNotifier && matchedShortNames.Count > 0)
-            {
-                lines.Add("Good mods found:");
-                foreach (var name in matchedShortNames)
-                    lines.Add($"  • {name}");
-            }
-
-            if (lines.Count > 0)
-                DrawVoyageOverlay(lines, matchedShortNames.Count > 0 ? color : Color.White);
-        }
-    }
-
-    private void TryHighlightMatch(
-        Element el,
-        string blob,
-        (string MatchText, string ShortName, Func<VoyageSettings, bool> IsEnabled)[] activeRules,
-        Color color,
-        int thickness,
-        List<string> matchedShortNames)
-    {
-        var plain = NormalizeForMatch(StripPoETags(blob));
-        var rawNorm = NormalizeForMatch(blob);
-
-        string matchedName = null;
-        foreach (var rule in activeRules)
-        {
-            if (!TextMatchesRule(plain, rawNorm, rule.MatchText))
-                continue;
-            matchedName = rule.ShortName;
-            break;
-        }
-
-        if (matchedName == null)
-            return;
-
-        if (!matchedShortNames.Contains(matchedName))
-            matchedShortNames.Add(matchedName);
-
-        // Confirmed target: live GetClientRect of the tooltip element.
-        Element tooltip;
-        try
-        {
-            tooltip = el.Tooltip;
-        }
-        catch
-        {
-            return;
-        }
-
-        if (tooltip is not { IsValid: true })
-            return;
-
-        RectangleF rect;
-        try
-        {
-            rect = tooltip.GetClientRect();
-        }
-        catch
-        {
-            return;
-        }
-
-        if (rect.Width <= 1 || rect.Height <= 1)
-            return;
-
-        // Center third of width, full height; top/bottom lines only.
-        var w = rect.Width / 3f;
-        var left = rect.X + w;
-        var right = left + w;
-        var top = rect.Y;
-        var bottom = rect.Bottom;
-        Graphics.DrawLine(new Vector2(left, top), new Vector2(right, top), thickness, color);
-        Graphics.DrawLine(new Vector2(left, bottom), new Vector2(right, bottom), thickness, color);
-    }
-
-    private static bool TextMatchesRule(string plainNorm, string rawNorm, string matchText)
-    {
-        if (string.IsNullOrEmpty(matchText))
-            return false;
-
-        var needle = NormalizeForMatch(matchText);
-        if (string.IsNullOrEmpty(needle))
-            return false;
-
-        if ((!string.IsNullOrEmpty(plainNorm) && plainNorm.Contains(needle, StringComparison.OrdinalIgnoreCase)) ||
-            (!string.IsNullOrEmpty(rawNorm) && rawNorm.Contains(needle, StringComparison.OrdinalIgnoreCase)))
-            return true;
-
-        var tagged = NormalizeForMatch("<augmented>{" + matchText + "}");
-        return (!string.IsNullOrEmpty(rawNorm) && rawNorm.Contains(tagged, StringComparison.OrdinalIgnoreCase)) ||
-               (!string.IsNullOrEmpty(plainNorm) && plainNorm.Contains(tagged, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static string NormalizeForMatch(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return string.Empty;
-        return WhitespaceRegex.Replace(text, " ").Trim();
-    }
-
-    private static string BuildMatchBlob(Element el)
-    {
-        var parts = new List<string>();
-        try
-        {
-            AppendIfText(parts, el.Text);
-            AppendIfText(parts, el.TextNoTags);
-            if (el.Children != null)
-            {
-                foreach (var child in el.Children)
-                {
-                    AppendIfText(parts, child?.Text);
-                    AppendIfText(parts, child?.TextNoTags);
-                }
-            }
-        }
-        catch
-        {
-            // ignored
-        }
-
-        AppendIfText(parts, CollectTooltipTextDeep(el));
-        return parts.Count == 0 ? null : string.Join("\n", parts);
-    }
-
-    private static IEnumerable<Element> EnumerateDescendants(Element root, int maxDepth)
-    {
-        if (root is not { IsValid: true })
-            yield break;
-
-        var stack = new Stack<(Element El, int Depth)>();
-        stack.Push((root, 0));
-        while (stack.Count > 0)
-        {
-            var (el, depth) = stack.Pop();
-            if (depth > 0)
-                yield return el;
-
-            if (depth >= maxDepth || el.Children == null)
-                continue;
-
-            try
-            {
-                foreach (var child in el.Children)
-                {
-                    if (child is { IsValid: true })
-                        stack.Push((child, depth + 1));
-                }
-            }
-            catch
-            {
-                // ignored
-            }
-        }
-    }
-
-    private void DrawVoyageOverlay(IReadOnlyList<string> lines, Color accent)
-    {
-        if (lines == null || lines.Count == 0)
-            return;
-
-        const float pad = 6f;
-        const float lineH = 18f;
-        var x = 20f;
-        var y = 120f;
-        var maxWidth = 0f;
-        foreach (var line in lines)
-            maxWidth = Math.Max(maxWidth, Graphics.MeasureText(line).X);
-
-        var box = new RectangleF(x - pad, y - pad, maxWidth + pad * 2, lines.Count * lineH + pad * 2);
-        Graphics.DrawBox(box, new Color(0, 0, 0, 180));
-        Graphics.DrawFrame(box, accent, 2);
-
-        for (var i = 0; i < lines.Count; i++)
-            Graphics.DrawText(lines[i], new Vector2(x, y + i * lineH), Color.White);
-    }
-
-    private static Element SafeGetChildFromIndices(Element root, params int[] indices)
-    {
-        if (root == null || indices == null)
-            return null;
-
-        try
-        {
-            var current = root;
-            foreach (var index in indices)
-            {
-                if (current?.Children == null || index < 0 || index >= current.Children.Count)
-                    return null;
-                current = current.Children[index];
-                if (current is not { IsValid: true })
-                    return null;
-            }
-
-            return current;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static int SafeChildCount(Element element)
-    {
-        try
-        {
-            return element?.Children?.Count ?? 0;
-        }
-        catch
-        {
-            return -1;
-        }
-    }
-
-    private static string CollectTooltipTextDeep(Element element)
-    {
-        if (element == null)
-            return null;
-
-        Element tooltip;
-        try
-        {
-            tooltip = element.Tooltip;
-        }
-        catch
-        {
-            return null;
-        }
-
-        if (tooltip is not { IsValid: true })
-            return null;
-
-        var parts = new List<string>();
-        CollectElementTextRecursive(tooltip, parts, 0, 12);
-        return parts.Count == 0 ? null : string.Join("\n", parts);
-    }
-
-    private static void CollectElementTextRecursive(Element element, List<string> parts, int depth, int maxDepth)
-    {
-        if (element is not { IsValid: true } || depth > maxDepth)
-            return;
-
-        try
-        {
-            AppendIfText(parts, element.Text);
-            AppendIfText(parts, element.TextNoTags);
-            try
-            {
-                AppendIfText(parts, element.GetText(2048));
-                AppendIfText(parts, element.GetTextWithNoTags(2048));
-            }
-            catch
-            {
-                // ignored
-            }
-
-            if (element.Children == null)
-                return;
-
-            foreach (var child in element.Children)
-                CollectElementTextRecursive(child, parts, depth + 1, maxDepth);
-        }
-        catch
-        {
-            // ignored
-        }
-    }
-
-    private static void AppendIfText(List<string> parts, string text)
-    {
-        if (string.IsNullOrWhiteSpace(text) || parts.Contains(text))
-            return;
-        parts.Add(text);
-    }
-
-    private static string StripPoETags(string text)
-    {
-        if (string.IsNullOrEmpty(text))
-            return text;
-
-        var previous = text;
-        for (var i = 0; i < 8; i++)
-        {
-            var next = PoETagRegex.Replace(previous, "$1");
-            if (next == previous)
-                break;
-            previous = next;
-        }
-
-        return previous;
     }
 
     private static Vector4 GetCompareColor(double @new, double old)

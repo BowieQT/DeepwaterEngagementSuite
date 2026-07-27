@@ -1,0 +1,498 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using DeepwaterEngagementSuite.VoyagePlannerData;
+using ExileCore;
+using ExileCore.PoEMemory.Components;
+using ExileCore.PoEMemory.Elements;
+using ExileCore.PoEMemory.Elements.InventoryElements;
+using ExileCore.PoEMemory.MemoryObjects;
+using ExileCore.Shared;
+using ExileCore.Shared.Enums;
+using ExileCore.Shared.Helpers;
+using ImGuiNET;
+using SharpDX;
+using Direction = DeepwaterEngagementSuite.VoyagePlannerData.Direction;
+using Vector2 = System.Numerics.Vector2;
+
+namespace DeepwaterEngagementSuite;
+
+public partial class DeepwaterEngagementSuite
+{
+    private VoyageSolutionResult _result;
+    private Task _run;
+    private SyncTask<bool> _voyagePlaceTask;
+    private VoyagePlanner _voyagePlanner;
+    private int _selectedSolutionIndex = 0;
+    private bool _voyageSolving;
+    private long _voyageNodesExplored;
+    private long _voyageNodesPruned;
+    private double _voyageElapsed;
+
+    private async SyncTask<bool> PlacePieces(VoyageSolution solution)
+    {
+        var tree = GameController.IngameState.IngameUi.VoyageWindow;
+        var clearPos = tree.ClearButton.GetClientRectCache.Center.ToVector2Num();
+        Input.SetCursorPos(GameController.Window.GetWindowRectangleTimeCache.TopLeft.ToVector2Num() + clearPos);
+        await TaskUtils.CheckEveryFrameWithThrow(() => tree.ClearButton.HasShinyHighlight, TimeSpan.FromSeconds(1));
+        Input.LeftDown();
+        await TaskUtils.NextFrame();
+        Input.LeftUp();
+        await TaskUtils.CheckEveryFrameWithThrow(() => tree.Tiles.All(x => x.ItemContainer == null), TimeSpan.FromSeconds(1));
+        for (int i = 0; i < 9; i++)
+        {
+            var tile = tree.Tiles[i];
+            var p = solution.Grid[i / 3, i % 3];
+            var pieceElem = tree.AvailableCharts[p.Piece.Id];
+            var click1Pos = pieceElem.GetClientRectCache.Center.ToVector2Num();
+            var click2Pos = tile.GetClientRectCache.Center.ToVector2Num();
+            Input.SetCursorPos(GameController.Window.GetWindowRectangleTimeCache.TopLeft.ToVector2Num() + click1Pos);
+            await TaskUtils.CheckEveryFrameWithThrow(() => GameController.IngameState.UIHover?.Address.Equals(pieceElem.Address) ?? false,
+                () => $"Hover address was {GameController.IngameState.UIHover?.Address:X} not {pieceElem.Address:X}",
+                TimeSpan.FromSeconds(1));
+            Input.LeftDown();
+            await TaskUtils.NextFrame();
+            Input.LeftUp();
+            await TaskUtils.CheckEveryFrameWithThrow(() => GameController.IngameState.IngameUi.Cursor.Action == MouseActionType.HoldItemForSell, TimeSpan.FromSeconds(1));
+            Input.SetCursorPos(GameController.Window.GetWindowRectangleTimeCache.TopLeft.ToVector2Num() + click2Pos);
+            await TaskUtils.CheckEveryFrameWithThrow(() => GameController.IngameState.UIHoverElement?.Address.Equals(tile.Address) ?? false,
+                () => $"Hover address was {GameController.IngameState.UIHoverElement?.Address:X} not {tile.Address:X}",
+                TimeSpan.FromSeconds(1));
+            Input.LeftDown();
+            await TaskUtils.NextFrame();
+            Input.LeftUp();
+            await TaskUtils.CheckEveryFrameWithThrow(() => GameController.IngameState.IngameUi.Cursor.Action == MouseActionType.Free, TimeSpan.FromSeconds(1));
+
+            while (tile.ItemContainer?.Entity.GetComponent<DeepwaterChart>().Rotation is {} rot && rot != p.Rotation)
+            {
+                DebugWindow.LogMsg($"{rot}, {p.Rotation}");
+                var click3Pos = tile.GetClientRectCache.Center.ToVector2Num();
+                Input.SetCursorPos(GameController.Window.GetWindowRectangleTimeCache.TopLeft.ToVector2Num() + click3Pos);
+                await TaskUtils.CheckEveryFrameWithThrow(() => GameController.IngameState.UIHover?.Address.Equals(tile.ItemContainer.Address) ?? false, TimeSpan.FromSeconds(1));
+                Input.RightDown();
+                await TaskUtils.NextFrame();
+                Input.RightUp();
+                await TaskUtils.CheckEveryFrameWithThrow(() => tile.ItemContainer?.Entity?.GetComponent<DeepwaterChart>()?.Rotation is {} rot2 && rot2 != rot, TimeSpan.FromSeconds(1));
+            }
+        }
+
+        return true;
+    }
+
+    private void DrawVoyageHighlights()
+    {
+        var settings = Settings.VoyageSettings;
+        if (!settings.EnableVoyageHandling)
+            return;
+
+        if (Input.IsKeyDown(Keys.Escape) && _voyagePlaceTask != null)
+        {
+            _voyagePlaceTask = null;
+        }
+
+        VoyageWindow tree;
+        try
+        {
+            tree = GameController?.IngameState?.IngameUi?.VoyageWindow;
+        }
+        catch (Exception ex)
+        {
+            _voyagePlaceTask = null;
+            DebugWindow.LogError(ex.ToString());
+            return;
+        }
+
+        if (tree is not { IsValid: true, IsVisible: true })
+        {
+            _voyagePlaceTask = null;
+            return;
+        }
+
+        TaskUtils.RunOrRestart(ref _voyagePlaceTask, () => null);
+
+        var modsPerTileIndex = GetTileMods(tree);
+
+        var tiles = tree.Tiles;
+        for (var index = 0; index < tiles.Count; index++)
+        {
+            var tile = tiles[index];
+            var mods = modsPerTileIndex.GetValueOrDefault(index) ?? [];
+            var tileTopLeft = tile.GetClientRectCache.TopLeft.ToVector2Num();
+            Graphics.DrawTextWithBackground($"({index / 3}, {index % 3})", tileTopLeft, Color.Black);
+            var tileCenter = tile.GetClientRectCache.Center.ToVector2Num() + new Vector2(0, 10);
+            foreach (var itemMod in mods)
+            {
+                var matchingSetting = Settings.VoyageSettings.BorderModifiers.Content.FirstOrDefault(c => c.Id.Value.Equals(itemMod.RawName, StringComparison.OrdinalIgnoreCase));
+                var text = matchingSetting?.Abbreviation.Value is { Length: > 0 } abbv
+                    ? abbv
+                    : itemMod.RawName switch
+                    {
+                        var r when r.StartsWith("DeepwaterBorder", StringComparison.Ordinal) => r["DeepwaterBorder".Length..],
+                        var r => r
+                    };
+                var size = Graphics.DrawTextWithBackground(text, tileCenter,
+                    matchingSetting != null && matchingSetting.ValueMultiplier > Settings.VoyageSettings.BorderHighlightThreshold
+                        ? matchingSetting.HighlightColor
+                        : Color.Orange, FontAlign.Center, Color.Black);
+                tileCenter.Y += size.Y;
+            }
+        }
+
+        var charts = tree.AvailableCharts;
+        for (int i = 0; i < charts.Count; i++)
+        {
+            Graphics.DrawTextWithBackground($"#{i}", charts[i].GetClientRectCache.TopLeft.ToVector2Num(), Color.Black);
+        }
+
+        if (settings.ShowOptimizerWindow.Value)
+        {
+            ShowVoyageOptimizerWindow(tree,tiles);
+        }
+    }
+
+    private static Dictionary<int, List<ItemMod>> GetTileMods(VoyageWindow tree)
+    {
+        var borderMods = tree.Data.BorderMods;
+        Dictionary<int, List<ItemMod>> modsPerTileIndex = [];
+        if (borderMods.Count >= 12)
+        {
+            modsPerTileIndex = new Dictionary<int, List<int>>
+            {
+                [0] = [0, 11],
+                [1] = [1],
+                [2] = [2, 3],
+                [3] = [10],
+                [4] = [],
+                [5] = [4],
+                [6] = [8, 9],
+                [7] = [7],
+                [8] = [5, 6],
+            }.ToDictionary(
+                x => x.Key,
+                x => x.Value.Select(v => borderMods[v])
+                    .ToList());
+        }
+
+        return modsPerTileIndex;
+    }
+
+    private void ShowVoyageOptimizerWindow(VoyageWindow tree, List<VoyageTileElement> tiles)
+    {
+        if (!ImGui.Begin("Voyage Optimizer"))
+        {
+            ImGui.End();
+            return;
+        }
+
+        _voyageSolving = _run is { IsCompleted: false };
+        
+        if (ImGui.Button("Solve"))
+        {
+            _voyagePlanner?.Cancel();
+            _result = null;
+            _selectedSolutionIndex = 0;
+            _voyageNodesExplored = 0;
+            _voyageNodesPruned = 0;
+            _voyageElapsed = 0;
+            _run = Task.Run(() =>
+            {
+                var i = 0;
+                var pieces = new List<MapPiece>();
+                foreach (var chart in tree.AvailableCharts)
+                {
+                    if (chart.Item.TryGetComponent(out DeepwaterChart c))
+                    {
+                        var rotation = ((Direction)c.Room.Path);
+                        var mp = new MapPiece(i,
+                            int.PopCount((int)rotation) switch
+                            {
+                                4 => PieceType.Cross,
+                                3 => PieceType.Tee,
+                                1 => PieceType.Single,
+                                2 => rotation.HasFlag(Direction.Left) == rotation.HasFlag(Direction.Right)
+                                    ? PieceType.Straight
+                                    : PieceType.Corner
+                            }, rotation, [
+                                new Modifier("Default", 1), ..chart.Item.GetComponent<Mods>()?.ImplicitMods.Select(im =>
+                            {
+                                return new Modifier(im.RawName,
+                                    Settings.VoyageSettings.ChartModifiers.Content.FirstOrDefault(cm => cm.Id.Value.Equals(im.RawName, StringComparison.OrdinalIgnoreCase))?.Weight
+                                        .Value ?? 0);
+                            }) ?? []
+                            ]);
+                        pieces.Add(mp);
+                    }
+
+                    i++;
+                }
+
+                var modsPerTileIndex = GetTileMods(tree);
+                var boardMultipliers = modsPerTileIndex.Select(x => (x.Key,
+                    x.Value.Select(m => Settings.VoyageSettings.BorderModifiers.Content.FirstOrDefault(c => c.Id.Value == m.RawName)?.ValueMultiplier.Value ?? 1)
+                        .Aggregate(1f, (a, b) => a * b))).ToList();
+                var tileMultiplierArray = new double[3, 3];
+                foreach (var boardMultiplier in boardMultipliers)
+                {
+                    tileMultiplierArray[boardMultiplier.Key / 3, boardMultiplier.Key % 3] = boardMultiplier.Item2;
+                }
+
+                _voyagePlanner = new VoyagePlanner();
+                foreach (var r in _voyagePlanner.Solve(new VoyagePuzzle(pieces, tileMultiplierArray, [])))
+                {
+                    _result = r;
+                    _voyageNodesExplored = r.NodesExplored;
+                    _voyageNodesPruned = r.NodesPruned;
+                }
+
+                _voyageSolving = false;
+            });
+        }
+
+        if (_voyagePlanner != null && _voyageSolving)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel"))
+            {
+                _voyagePlanner?.Cancel();
+            }
+        }
+
+        if (_voyageSolving)
+        {
+            ImGui.SameLine();
+            ImGui.ProgressBar((_run?.IsCompleted ?? true) ? 1f : 0.5f, default, $"{_voyageElapsed:F1}s");
+        }
+
+        if (_result != null && _result.Solutions.Count > 0)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Place"))
+            {
+                if (_selectedSolutionIndex >= _result.Solutions.Count)
+                    _selectedSolutionIndex = 0;
+                var sol = _result.Solutions[_selectedSolutionIndex];
+                _voyagePlaceTask = PlacePieces(sol);
+            }
+        }
+
+        ImGui.Spacing();
+
+        if (_voyageSolving || _result != null)
+        {
+            ImGui.Text($"Nodes: {_voyageNodesExplored:N0} explored, {_voyageNodesPruned:N0} pruned");
+        }
+
+        if (_result == null || _result.Solutions.Count == 0)
+        {
+            if (_voyageSolving)
+            {
+                ImGui.TextColored(Color.Yellow.ToImguiVec4(), "Searching...");
+            }
+            else
+            {
+                ImGui.TextColored(Color.Gray.ToImguiVec4(), "No solutions yet. Press Solve.");
+            }
+
+            ImGui.End();
+            return;
+        }
+
+        _selectedSolutionIndex = Math.Clamp(_selectedSolutionIndex, 0, _result.Solutions.Count - 1);
+        var currentSolution = _result.Solutions[_selectedSolutionIndex];
+
+        var asciiArt = BuildAsciiGrid(currentSolution.Grid, tiles);
+
+        using (ImGuiHelpers.UseStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(0, 0)))
+            foreach (var line in asciiArt)
+            {
+                ImGui.TextUnformatted(line);
+            }
+
+        ImGui.Spacing();
+
+        ImGui.Text($"Score: {currentSolution.TotalScore:F2}");
+        ImGui.Text($"Valid: {(currentSolution.IsValid ? "Yes" : "No")}");
+
+        if (_result.Solutions.Count > 0)
+        {
+            ImGui.Spacing();
+            if (ImGui.BeginTable("SolutionsList", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
+            {
+                ImGui.TableSetupColumn("#");
+                ImGui.TableSetupColumn("Score");
+                ImGui.TableSetupColumn("Valid");
+                ImGui.TableSetupColumn("Select");
+                ImGui.TableHeadersRow();
+
+                for (int i = 0; i < _result.Solutions.Count; i++)
+                {
+                    var sol = _result.Solutions[i];
+                    ImGui.TableNextRow();
+                    ImGui.PushID(i);
+                    ImGui.TableNextColumn();
+                    ImGui.Text($"{i + 1}");
+                    ImGui.TableNextColumn();
+                    ImGui.Text($"{sol.TotalScore:F2}");
+                    ImGui.TableNextColumn();
+                    ImGui.Text($"{sol.IsValid}");
+                    ImGui.TableNextColumn();
+                    var isSelected = i == _selectedSolutionIndex;
+                    if (isSelected)
+                        ImGui.PushStyleColor(ImGuiCol.Button, Color.Green.ToImguiVec4());
+                    if (ImGui.Button(isSelected ? "Selected" : "Select"))
+                    {
+                        _selectedSolutionIndex = i;
+                    }
+
+                    if (isSelected)
+                        ImGui.PopStyleColor();
+                    ImGui.PopID();
+                }
+
+                ImGui.EndTable();
+            }
+        }
+
+        if (ImGui.BeginTable("ScoreBreakdown", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchSame))
+        {
+            ImGui.TableSetupColumn("Tile", ImGuiTableColumnFlags.WidthFixed, 25);
+            ImGui.TableSetupColumn("Piece", ImGuiTableColumnFlags.WidthFixed, 20);
+            ImGui.TableSetupColumn("Type", ImGuiTableColumnFlags.WidthFixed, 100);
+            ImGui.TableSetupColumn("Mods");
+            ImGui.TableHeadersRow();
+
+            for (int i = 0; i < 9; i++)
+            {
+                var r = i / 3;
+                var c = i % 3;
+                var placement = currentSolution.Grid[r, c];
+
+                ImGui.TableNextRow();
+                ImGui.PushID($"tile{i}");
+                ImGui.TableNextColumn();
+                ImGui.Text($"{r},{c}");
+                ImGui.TableNextColumn();
+                ImGui.Text($"#{placement.Piece.Id}");
+                ImGui.TableNextColumn();
+                ImGui.Text($"{placement.Piece.Type}");
+                ImGui.TableNextColumn();
+                var modText = string.Join(", ", placement.Piece.Modifiers.Where(m => m.Name != "Default").Select(m => $"{m.Name}({m.Weight:F1})"));
+                ImGui.Text(string.IsNullOrEmpty(modText) ? "-" : modText);
+                ImGui.PopID();
+            }
+
+            ImGui.EndTable();
+        }
+
+        ImGui.End();
+    }
+
+    private static string[] BuildAsciiGrid(MapPiecePlacement[,] grid, List<VoyageTileElement> tiles)
+    {
+        const int H = 5;
+        const int W = 7;
+        const int GH = H * 3 + 2;
+        const int GW = W * 3 + 2;
+
+        var buf = new char[GH, GW];
+        for (int y = 0; y < GH; y++)
+        for (int x = 0; x < GW; x++)
+            buf[y, x] = ' ';
+
+        FillBox(buf, '+', '+', '+', '+', '-', '|', 0, 0, GH - 1, GW - 1);
+
+        for (int r = 0; r < 3; r++)
+        {
+            for (int c = 0; c < 3; c++)
+            {
+                var left = c * W + 1;
+                var right = left + W - 1;
+                var top = r * H + 1;
+                var bot = top + H - 1;
+                var cx = left + W / 2;
+                var cy = top + H / 2;
+
+                var p = grid[2 - r, c];
+                var conn = p.Connections;
+
+                for (int y = top; y <= bot; y++)
+                for (int x = left; x <= right; x++)
+                    buf[y, x] = ' ';
+
+                if (conn.HasFlag(Direction.Up))
+                    for (int y = top; y < cy; y++)
+                        buf[y, cx] = '|';
+                if (conn.HasFlag(Direction.Down))
+                    for (int y = cy + 1; y <= bot; y++)
+                        buf[y, cx] = '|';
+                if (conn.HasFlag(Direction.Left))
+                    for (int x = left; x < cx; x++)
+                        buf[cy, x] = '-';
+                if (conn.HasFlag(Direction.Right))
+                    for (int x = cx + 1; x <= right; x++)
+                        buf[cy, x] = '-';
+
+                buf[cy, cx] = conn switch
+                {
+                    Direction.Up | Direction.Down => '|',
+                    Direction.Left | Direction.Right => '-',
+                    Direction.All => '+',
+                    _ => '.',
+                };
+
+                // Match indicator
+                var tileIdx = (2 - r) * 3 + c;
+                bool matches = false;
+                if (tileIdx < tiles.Count)
+                {
+                    var t = tiles[tileIdx];
+                    if (t.ItemContainer?.Address != null)
+                    {
+                        var placed = t.ItemContainer.Entity.GetComponent<DeepwaterChart>();
+                        if (placed != null)
+                        {
+                            var actualRot = ((Direction)placed.Room.Path).RotateCcw(placed.Rotation);
+                            var expectedRot = p.Connections;
+                            matches = actualRot == expectedRot;
+                        }
+                    }
+                }
+
+                buf[cy + 1, cx + 2] = matches ? 'O' : 'X';
+            }
+        }
+
+        var lines = new string[GH];
+        for (int y = 0; y < GH; y++)
+        {
+            var row = new char[GW];
+            for (int x = 0; x < GW; x++)
+                row[x] = buf[y, x];
+            lines[y] = new string(row);
+        }
+
+        return lines;
+    }
+
+    private static void FillBox(char[,] buf, char tl, char tr, char bl, char br, char h, char v, int y1, int x1, int y2, int x2)
+    {
+        buf[y1, x1] = tl;
+        buf[y1, x2] = tr;
+        buf[y2, x1] = bl;
+        buf[y2, x2] = br;
+        for (int x = x1 + 1; x < x2; x++)
+        {
+            buf[y1, x] = h;
+            buf[y2, x] = h;
+        }
+
+        for (int y = y1 + 1; y < y2; y++)
+        {
+            buf[y, x1] = v;
+            buf[y, x2] = v;
+        }
+    }
+}

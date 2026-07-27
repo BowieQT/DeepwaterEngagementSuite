@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Windows.Forms;
 using ExileCore.Shared.Attributes;
 using ExileCore.Shared.Enums;
@@ -170,7 +171,16 @@ public class BubbleSettings
 [Submenu(CollapsedByDefault = true)]
 public class VoyageSettings
 {
-    public ToggleNode Enable { get; set; } = new ToggleNode(true);
+    public VoyageSettings()
+    {
+        ClearBorderModifiers = new ButtonNode() { OnPressed = () => { BorderModifiers.Content.Clear(); } };
+        ClearChartModifiers = new ButtonNode() { OnPressed = () => { ChartModifiers.Content.Clear(); } };
+    }
+
+    public ToggleNode EnableVoyageHandling { get; set; } = new ToggleNode(true);
+
+    [Menu("Show optimizer window")]
+    public ToggleNode ShowOptimizerWindow { get; set; } = new ToggleNode(true);
 
     [Menu("Line thickness")]
     public RangeNode<int> LineThickness { get; set; } = new RangeNode<int>(3, 1, 12);
@@ -201,6 +211,57 @@ public class VoyageSettings
 
     [Menu("100% more Scarabs adjacent", "100% more Scarabs found in adjacent Areas")]
     public ToggleNode HighlightMoreScarabsAdjacent { get; set; } = new ToggleNode(true);
+
+    public RangeNode<float> BorderHighlightThreshold { get; set; } = new RangeNode<float>(1.01f, 0, 10);
+
+    [JsonIgnore]
+    public ButtonNode ClearBorderModifiers { get; set; }
+
+    public ContentNode<VoyageBorderModifier> BorderModifiers { get; set; } = new ContentNode<VoyageBorderModifier>
+    {
+        EnableControls = true,
+        EnableItemCollapsing = true,
+        ItemFactory = () => new VoyageBorderModifier(),
+        ItemFilter = (o, s) => o.Id.Value.Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                               o.Abbreviation.Value.Contains(s, StringComparison.OrdinalIgnoreCase),
+    };
+
+    [JsonIgnore]
+    public ButtonNode ClearChartModifiers { get; set; }
+
+    public ContentNode<VoyageChartModifier> ChartModifiers { get; set; } = new ContentNode<VoyageChartModifier>
+    {
+        EnableControls = true,
+        EnableItemCollapsing = true,
+        ItemFactory = () => new VoyageChartModifier(),
+        ItemFilter = (o, s) => o.Id.Value.Contains(s, StringComparison.OrdinalIgnoreCase),
+    };
+}
+
+[Submenu(CollapsedByDefault = true)]
+public class VoyageBorderModifier
+{
+    public TextNode Id { get; set; } = new TextNode("");
+    public TextNode Abbreviation { get; set; } = new TextNode("");
+    public RangeNode<float> ValueMultiplier { get; set; } = new RangeNode<float>(1, 0, 10);
+    public ColorNode HighlightColor { get; set; } = Color.Cyan;
+
+    public override string ToString()
+    {
+        return $"{Id.Value} {ValueMultiplier.Value}###";
+    }
+}
+
+[Submenu(CollapsedByDefault = true)]
+public class VoyageChartModifier
+{
+    public TextNode Id { get; set; } = new TextNode("");
+    public RangeNode<float> Weight { get; set; } = new RangeNode<float>(0, 0, 10);
+
+    public override string ToString()
+    {
+        return $"{Id.Value} {Weight.Value}###";
+    }
 }
 
 public enum SearchState
