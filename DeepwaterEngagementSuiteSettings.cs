@@ -41,6 +41,8 @@ public class DeepwaterEngagementSuiteSettings : ISettings
     public RangeNode<int> MapIconSize { get; set; } = new RangeNode<int>(30, 15, 200);
 
     public BubbleSettings BubbleSettings { get; set; } = new BubbleSettings();
+
+    [Menu("Bubble planner settings")]
     public PlannerSettings PlannerSettings { get; set; } = new PlannerSettings();
     public VoyageSettings VoyageSettings { get; set; } = new VoyageSettings();
 
@@ -73,7 +75,7 @@ public class DeepwaterEngagementSuiteSettings : ISettings
     };
 }
 
-[Submenu]
+[Submenu(CollapsedByDefault = true)]
 public class PlannerSettings
 {
     // Planner weights (default 1 via ChestSettings). High-value targets are weighted higher.
@@ -184,42 +186,12 @@ public class VoyageSettings
 
     [Menu("Solver time limit (seconds)", "Max time the solver runs before returning the best solution found so far. 0 = no limit.")]
     public RangeNode<int> SolverTimeLimitSeconds { get; set; } = new RangeNode<int>(5, 1, 120);
-
-    [Menu("Line thickness")]
-    public RangeNode<int> LineThickness { get; set; } = new RangeNode<int>(3, 1, 12);
-
-    [Menu("Show match notifier", "On-screen list of matched good mods only (not every adjacent-area tip)")]
-    public ToggleNode ShowMatchNotifier { get; set; } = new ToggleNode(true);
-
-    [Menu("Show debug status", "Diagnostic counts + a few sample tips. Off by default; does not list every mod.")]
-    public ToggleNode ShowDebugStatus { get; set; } = new ToggleNode(false);
-
-    [Menu("Divine Orb adjacent rares", "Rare Monsters in adjacent Areas drop an additional Divine Orb")]
-    public ToggleNode HighlightDivineOrbAdjacentRares { get; set; } = new ToggleNode(true);
-
-    [Menu("200% XP adjacent areas", "Players in adjacent Areas gain 200% increased Experience")]
-    public ToggleNode HighlightAdjacentAreaXp { get; set; } = new ToggleNode(true);
-
-    [Menu("Captainsbane adjacent areas", "Adjacent Areas contain Captainsbane")]
-    public ToggleNode HighlightCaptainsbane { get; set; } = new ToggleNode(true);
-
-    [Menu("Stacked Decks from basic currency", "Basic Currency items dropped by Monsters in adjacent Areas will instead drop as Stacked Decks")]
-    public ToggleNode HighlightStackedDecksFromBasicCurrency { get; set; } = new ToggleNode(true);
-
-    [Menu("2 additional Treasure Anchors", "Adjacent Areas contain 2 additional Treasure Anchors")]
-    public ToggleNode HighlightTwoTreasureAnchors { get; set; } = new ToggleNode(true);
-
-    [Menu("4 additional Treasure Anchors", "Adjacent Areas contain 4 additional Treasure Anchors")]
-    public ToggleNode HighlightFourTreasureAnchors { get; set; } = new ToggleNode(true);
-
-    [Menu("100% more Scarabs adjacent", "100% more Scarabs found in adjacent Areas")]
-    public ToggleNode HighlightMoreScarabsAdjacent { get; set; } = new ToggleNode(true);
-
     public RangeNode<float> BorderHighlightThreshold { get; set; } = new RangeNode<float>(1.01f, 0, 10);
 
     [JsonIgnore]
     public ButtonNode ClearBorderModifiers { get; set; }
 
+    [Menu(null, CollapsedByDefault = true)]
     public ContentNode<VoyageBorderModifier> BorderModifiers { get; set; } = new ContentNode<VoyageBorderModifier>
     {
         EnableControls = true,
@@ -232,6 +204,7 @@ public class VoyageSettings
     [JsonIgnore]
     public ButtonNode ClearChartModifiers { get; set; }
 
+    [Menu(null, CollapsedByDefault = true)]
     public ContentNode<VoyageChartModifier> ChartModifiers { get; set; } = new ContentNode<VoyageChartModifier>
     {
         EnableControls = true,
