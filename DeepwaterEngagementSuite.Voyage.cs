@@ -28,9 +28,11 @@ public partial class DeepwaterEngagementSuite
     private VoyagePlanner _voyagePlanner;
     private int _selectedSolutionIndex = 0;
     private bool _voyageSolving;
+    private bool _voyageTimedOut;
     private long _voyageNodesExplored;
     private long _voyageNodesPruned;
     private double _voyageElapsed;
+    private System.Diagnostics.Stopwatch _voyageStopwatch;
 
     private async SyncTask<bool> PlacePieces(VoyageSolution solution)
     {
@@ -197,6 +199,8 @@ public partial class DeepwaterEngagementSuite
             _voyageNodesExplored = 0;
             _voyageNodesPruned = 0;
             _voyageElapsed = 0;
+            _voyageTimedOut = false;
+            _voyageStopwatch = System.Diagnostics.Stopwatch.StartNew();
             _run = Task.Run(() =>
             {
                 var i = 0;
@@ -218,9 +222,9 @@ public partial class DeepwaterEngagementSuite
                             }, rotation, [
                                 new Modifier("Default", 1), ..chart.Item.GetComponent<Mods>()?.ImplicitMods.Select(im =>
                             {
-                                return new Modifier(im.RawName,
-                                    Settings.VoyageSettings.ChartModifiers.Content.FirstOrDefault(cm => cm.Id.Value.Equals(im.RawName, StringComparison.OrdinalIgnoreCase))?.Weight
-                                        .Value ?? 0);
+                                var configuredWeight = Settings.VoyageSettings.ChartModifiers.Content
+                                    .FirstOrDefault(cm => cm.Id.Value.Equals(im.RawName, StringComparison.OrdinalIgnoreCase))?.Weight.Value;
+                                return new Modifier(im.RawName, configuredWeight ?? 0);
                             }) ?? []
                             ]);
                         pieces.Add(mp);
@@ -240,12 +244,17 @@ public partial class DeepwaterEngagementSuite
                 }
 
                 _voyagePlanner = new VoyagePlanner();
-                foreach (var r in _voyagePlanner.Solve(new VoyagePuzzle(pieces, tileMultiplierArray, [])))
+                var timeLimitSetting = Settings.VoyageSettings.SolverTimeLimitSeconds.Value;
+                foreach (var r in _voyagePlanner.Solve(new VoyagePuzzle(pieces, tileMultiplierArray, []),
+                    new VoyagePlannerSettings(TimeLimitSeconds: timeLimitSetting)))
                 {
                     _result = r;
                     _voyageNodesExplored = r.NodesExplored;
                     _voyageNodesPruned = r.NodesPruned;
                 }
+
+                if (_voyageStopwatch.Elapsed.TotalSeconds >= timeLimitSetting)
+                    _voyageTimedOut = true;
 
                 _voyageSolving = false;
             });
@@ -262,8 +271,12 @@ public partial class DeepwaterEngagementSuite
 
         if (_voyageSolving)
         {
+            if (_voyageStopwatch != null)
+                _voyageElapsed = _voyageStopwatch.Elapsed.TotalSeconds;
             ImGui.SameLine();
-            ImGui.ProgressBar((_run?.IsCompleted ?? true) ? 1f : 0.5f, default, $"{_voyageElapsed:F1}s");
+            var timeLimitSetting = Settings.VoyageSettings.SolverTimeLimitSeconds.Value;
+            var progress = timeLimitSetting > 0 ? Math.Min(1f, (float)(_voyageElapsed / timeLimitSetting)) : 0.5f;
+            ImGui.ProgressBar(progress, default, $"{_voyageElapsed:F1}s");
         }
 
         if (_result != null && _result.Solutions.Count > 0)
@@ -291,6 +304,10 @@ public partial class DeepwaterEngagementSuite
             {
                 ImGui.TextColored(Color.Yellow.ToImguiVec4(), "Searching...");
             }
+            else if (_voyageTimedOut)
+            {
+                ImGui.TextColored(Color.Orange.ToImguiVec4(), "Time limit reached — no valid solution found.");
+            }
             else
             {
                 ImGui.TextColored(Color.Gray.ToImguiVec4(), "No solutions yet. Press Solve.");
@@ -298,6 +315,11 @@ public partial class DeepwaterEngagementSuite
 
             ImGui.End();
             return;
+        }
+
+        if (_voyageTimedOut)
+        {
+            ImGui.TextColored(Color.Orange.ToImguiVec4(), $"Time limit reached — showing best solutions found so far (may not be optimal).");
         }
 
         _selectedSolutionIndex = Math.Clamp(_selectedSolutionIndex, 0, _result.Solutions.Count - 1);

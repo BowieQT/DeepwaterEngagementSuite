@@ -10,7 +10,7 @@ public class VoyagePlanner
 {
     private const int GridSize = 3;
 
-    private readonly (Direction Dir, int Dr, int Dc)[] _directions =
+    private static readonly (Direction Dir, int Dr, int Dc)[] Directions =
     [
         (Direction.Up, 1, 0),
         (Direction.Down, -1, 0),
@@ -25,12 +25,15 @@ public class VoyagePlanner
     private long _nodesExplored;
     private long _nodesPruned;
     private Stopwatch _stopwatch;
-    private HashSet<(int R, int C)> _lockedCells;
-    private Dictionary<(int R, int C), (int PieceIdx, int Rotation)> _lockedAssignments;
-    private (int R, int C)[] _cellOrder;
     private VoyagePuzzle _puzzle;
     private double _maxModifierPerPiece;
     private bool _cancelled;
+    private int _filledCount;
+
+    // Precomputed: for each piece, all (rotation, connections) pairs.
+    private record struct PieceOption(int PieceIdx, int Rotation, Direction Connections, double Weight);
+    private PieceOption[][] _pieceOptionsByGroup;
+    private int[] _pieceToGroup;
 
     public IEnumerable<VoyageSolutionResult> Solve(VoyagePuzzle puzzle, VoyagePlannerSettings settings = null)
     {
@@ -38,29 +41,75 @@ public class VoyagePlanner
         _puzzle = puzzle;
         _grid = new MapPiecePlacement[GridSize, GridSize];
         _pieceUsed = new bool[puzzle.AvailablePieces.Count];
-        _bestScore = double.NegativeInfinity;
+        _bestScore = 0;
         _topSolutions = new List<VoyageSolution>(settings.TopN);
         _nodesExplored = 0;
         _nodesPruned = 0;
+        _filledCount = 0;
         _stopwatch = Stopwatch.StartNew();
         _cancelled = false;
-
-        _lockedCells = puzzle.LockedPlacements
-            .Select(lp => (lp.Row, lp.Col))
-            .ToHashSet();
-        _lockedAssignments = puzzle.LockedPlacements
-            .ToDictionary(
-                lp => (lp.Row, lp.Col),
-                lp => (puzzle.AvailablePieces.IndexOf(puzzle.AvailablePieces.First(p => p.Id == lp.PieceId)), lp.Rotation));
-
-        _cellOrder = BuildCellOrder(puzzle);
 
         _maxModifierPerPiece = puzzle.AvailablePieces
             .Select(p => p.Modifiers.Sum(m => m.Weight))
             .DefaultIfEmpty(0)
             .Max();
 
-        var results = Search(0, settings);
+        // Group pieces by (Type, BaseConnections, TotalWeight) — pieces in the same group are
+        // interchangeable for both connectivity and scoring. We only try one piece per group at
+        // each cell, which collapses 25 pieces into ~7 groups.
+        var groupMap = new Dictionary<(PieceType, Direction, double), int>();
+        var groups = new List<List<int>>();
+        _pieceToGroup = new int[puzzle.AvailablePieces.Count];
+
+        for (var i = 0; i < puzzle.AvailablePieces.Count; i++)
+        {
+            var p = puzzle.AvailablePieces[i];
+            var key = (p.Type, p.BaseConnections, p.Modifiers.Sum(m => m.Weight));
+            if (!groupMap.TryGetValue(key, out var g))
+            {
+                g = groups.Count;
+                groupMap[key] = g;
+                groups.Add([]);
+            }
+            groups[g].Add(i);
+            _pieceToGroup[i] = g;
+        }
+
+        // Precompute all (rotation, connections) options for each group, sorted by weight desc.
+        _pieceOptionsByGroup = new PieceOption[groups.Count][];
+        for (var g = 0; g < groups.Count; g++)
+        {
+            var piece = puzzle.AvailablePieces[groups[g][0]];
+            var opts = new List<PieceOption>();
+            for (var rot = 0; rot < piece.DistinctRotations; rot++)
+            {
+                opts.Add(new PieceOption(groups[g][0], rot, piece.GetConnections(rot),
+                    piece.Modifiers.Sum(m => m.Weight)));
+            }
+            _pieceOptionsByGroup[g] = opts.ToArray();
+        }
+
+        // Handle locked placements
+        var lockedCells = puzzle.LockedPlacements
+            .Select(lp => (lp.Row, lp.Col))
+            .ToHashSet();
+        var lockedAssignments = puzzle.LockedPlacements
+            .ToDictionary(
+                lp => (lp.Row, lp.Col),
+                lp => (puzzle.AvailablePieces.IndexOf(puzzle.AvailablePieces.First(p => p.Id == lp.PieceId)), lp.Rotation));
+
+        // Place locked cells first
+        foreach (var (r, c) in lockedCells)
+        {
+            var (pieceIdx, rotation) = lockedAssignments[(r, c)];
+            var piece = puzzle.AvailablePieces[pieceIdx];
+            var connections = piece.GetConnections(rotation);
+            _grid[r, c] = new MapPiecePlacement(piece, rotation, connections);
+            _pieceUsed[pieceIdx] = true;
+            _filledCount++;
+        }
+
+        var results = Search(settings, lockedCells);
 
         foreach (var result in results)
         {
@@ -73,30 +122,13 @@ public class VoyagePlanner
 
     public void Cancel() => _cancelled = true;
 
-    private (int R, int C)[] BuildCellOrder(VoyagePuzzle puzzle)
-    {
-        var order = new List<(int R, int C)>();
-
-        foreach (var (r, c) in _lockedCells)
-        {
-            order.Add((r, c));
-        }
-
-        for (var r = 0; r < GridSize; r++)
-        {
-            for (var c = 0; c < GridSize; c++)
-            {
-                if (!_lockedCells.Contains((r, c)))
-                {
-                    order.Add((r, c));
-                }
-            }
-        }
-
-        return order.ToArray();
-    }
-
-    private IEnumerable<VoyageSolutionResult> Search(int idx, VoyagePlannerSettings settings)
+    /// <summary>
+    /// MRV-based backtracking search: at each step, pick the empty cell with the fewest valid
+    /// piece options (Minimum Remaining Values). This dramatically reduces the search space
+    /// because highly-constrained cells are resolved first, propagating adjacency constraints
+    /// to the remaining cells.
+    /// </summary>
+    private IEnumerable<VoyageSolutionResult> Search(VoyagePlannerSettings settings, HashSet<(int, int)> lockedCells)
     {
         if (_cancelled) yield break;
 
@@ -106,23 +138,24 @@ public class VoyagePlanner
             yield break;
         }
 
-        if (idx == GridSize * GridSize)
+        if (_filledCount == GridSize * GridSize)
         {
             if (IsFullyConnected())
             {
-                var score = CalculateScore(_puzzle);
-                if (score > _bestScore)
+                var score = CalculateScore();
+                if (score >= _bestScore)
                 {
-                    _bestScore = score;
-                    var solution = new VoyageSolution(
-                        CloneGrid(),
-                        score,
-                        true);
+                    if (score > _bestScore)
+                    {
+                        _bestScore = score;
+                        // New best score — clear previous solutions since they're worse
+                        _topSolutions.Clear();
+                    }
+
+                    var solution = new VoyageSolution(CloneGrid(), score, true);
                     _topSolutions.Insert(0, solution);
                     if (_topSolutions.Count > settings.TopN)
-                    {
                         _topSolutions.RemoveAt(_topSolutions.Count - 1);
-                    }
 
                     if (settings.YieldIntermediate)
                     {
@@ -137,74 +170,108 @@ public class VoyagePlanner
             yield break;
         }
 
-        var (r, c) = _cellOrder[idx];
-
-        if (_lockedCells.Contains((r, c)))
-        {
-            var (pieceIdx, rotation) = _lockedAssignments[(r, c)];
-            var piece = _puzzle.AvailablePieces[pieceIdx];
-            var connections = piece.GetConnections(rotation);
-            _grid[r, c] = new MapPiecePlacement(piece, rotation, connections);
-            _pieceUsed[pieceIdx] = true;
-
-            if (CheckAdjacency(r, c))
-            {
-                foreach (var result in Search(idx + 1, settings))
-                {
-                    yield return result;
-                }
-            }
-
-            _pieceUsed[pieceIdx] = false;
-            _grid[r, c] = null;
-            yield break;
-        }
-
-        var upperBoundScore = CalculateUpperBoundScore();
-        if (upperBoundScore <= _bestScore)
+        // Upper-bound prune: only prune if the upper bound is strictly worse than best.
+        // Use < (not <=) so equal-scoring subtrees are still explored, allowing TopN to fill.
+        if (CalculateUpperBoundScore() < _bestScore)
         {
             _nodesPruned++;
             yield break;
         }
 
-        for (var pieceIdx = 0; pieceIdx < _pieceUsed.Length; pieceIdx++)
+        // Find the most-constrained empty cell (MRV)
+        var bestCell = (-1, -1);
+        var bestOptions = new List<(int PieceIdx, int Rotation, Direction Connections)>();
+        var bestOptionCount = int.MaxValue;
+
+        for (var r = 0; r < GridSize; r++)
+        {
+            for (var c = 0; c < GridSize; c++)
+            {
+                if (_grid[r, c] != null) continue;
+
+                var options = GetValidOptions(r, c);
+                if (options.Count < bestOptionCount)
+                {
+                    bestOptionCount = options.Count;
+                    bestCell = (r, c);
+                    bestOptions = options;
+                    if (bestOptionCount == 0) break;
+                    if (bestOptionCount == 1) break;
+                }
+            }
+
+            if (bestOptionCount == 0) break;
+        }
+
+        if (bestOptionCount == 0)
+        {
+            _nodesPruned++;
+            yield break;
+        }
+
+        var (br, bc) = bestCell;
+        _nodesExplored++;
+
+        foreach (var (pieceIdx, rotation, connections) in bestOptions)
         {
             if (_cancelled) yield break;
-            if (_pieceUsed[pieceIdx]) continue;
-
-            _nodesExplored++;
 
             var piece = _puzzle.AvailablePieces[pieceIdx];
+            _grid[br, bc] = new MapPiecePlacement(piece, rotation, connections);
+            _pieceUsed[pieceIdx] = true;
+            _filledCount++;
 
-            for (var rot = 0; rot < piece.DistinctRotations; rot++)
+            if (IsConnectivityFeasible())
             {
-                var connections = piece.GetConnections(rot);
-
-                if (!CheckAdjacency(r, c, connections))
-                {
-                    _nodesPruned++;
-                    continue;
-                }
-
-                _grid[r, c] = new MapPiecePlacement(piece, rot, connections);
-                _pieceUsed[pieceIdx] = true;
-
-                foreach (var result in Search(idx + 1, settings))
+                foreach (var result in Search(settings, lockedCells))
                 {
                     yield return result;
                 }
+            }
+            else
+            {
+                _nodesPruned++;
+            }
 
-                _pieceUsed[pieceIdx] = false;
-                _grid[r, c] = null;
+            _pieceUsed[pieceIdx] = false;
+            _grid[br, bc] = null;
+            _filledCount--;
+        }
+    }
+
+    /// <summary>
+    /// Returns all valid (pieceIdx, rotation, connections) options for cell (r, c), considering
+    /// adjacency constraints with already-placed neighbors. Only one piece per interchangeable
+    /// group is included (symmetry breaking).
+    /// </summary>
+    private List<(int PieceIdx, int Rotation, Direction Connections)> GetValidOptions(int r, int c)
+    {
+        var result = new List<(int, int, Direction)>();
+        var triedGroups = new HashSet<int>();
+
+        for (var i = 0; i < _pieceUsed.Length; i++)
+        {
+            if (_pieceUsed[i]) continue;
+            var g = _pieceToGroup[i];
+            if (!triedGroups.Add(g)) continue;
+
+            foreach (var opt in _pieceOptionsByGroup[g])
+            {
+                if (CheckAdjacency(r, c, opt.Connections))
+                {
+                    result.Add((i, opt.Rotation, opt.Connections));
+                }
             }
         }
+
+        return result;
     }
 
     private bool CheckAdjacency(int r, int c, Direction? connections = null)
     {
         var conn = connections ?? _grid[r, c].Connections;
 
-        foreach (var (dir, dr, dc) in _directions)
+        foreach (var (dir, dr, dc) in Directions)
         {
             var nr = r + dr;
             var nc = c + dc;
@@ -230,8 +297,16 @@ public class VoyagePlanner
         var visited = new bool[GridSize, GridSize];
         var stack = new Stack<(int R, int C)>();
 
-        stack.Push((0, 0));
-        visited[0, 0] = true;
+        // Find first filled cell
+        int sr = -1, sc = -1;
+        for (var i = 0; i < GridSize && sr == -1; i++)
+            for (var j = 0; j < GridSize && sr == -1; j++)
+                if (_grid[i, j] != null) { sr = i; sc = j; }
+
+        if (sr == -1) return true;
+
+        stack.Push((sr, sc));
+        visited[sr, sc] = true;
         var count = 1;
 
         while (stack.TryPop(out var pos))
@@ -239,7 +314,7 @@ public class VoyagePlanner
             var (cr, cc) = pos;
             var conn = _grid[cr, cc].Connections;
 
-            foreach (var (dir, dr, dc) in _directions)
+            foreach (var (dir, dr, dc) in Directions)
             {
                 if (!conn.HasFlag(dir)) continue;
 
@@ -248,12 +323,14 @@ public class VoyagePlanner
 
                 if (nr < 0 || nr >= GridSize || nc < 0 || nc >= GridSize) continue;
                 if (visited[nr, nc]) continue;
+                if (_grid[nr, nc] == null) continue;
 
                 var neighborConn = _grid[nr, nc].Connections;
                 if (!neighborConn.HasFlag(dir.Opposite())) continue;
 
                 visited[nr, nc] = true;
                 count++;
+                if (count == GridSize * GridSize) return true;
                 stack.Push((nr, nc));
             }
         }
@@ -261,7 +338,91 @@ public class VoyagePlanner
         return count == GridSize * GridSize;
     }
 
-    private double CalculateScore(VoyagePuzzle puzzle)
+    private bool IsConnectivityFeasible()
+    {
+        if (_filledCount <= 1) return true;
+        if (_filledCount == GridSize * GridSize) return IsFullyConnected();
+
+        var components = CountConnectedComponents();
+        if (components <= 1) return true;
+
+        var emptyCells = GridSize * GridSize - _filledCount;
+
+        // Each unused piece can reduce component count by at most (maxConn - 1).
+        var mergeCapacities = new List<int>();
+        for (var i = 0; i < _pieceUsed.Length; i++)
+        {
+            if (_pieceUsed[i]) continue;
+            var maxConn = _pieceOptionsByGroup[_pieceToGroup[i]]
+                .Max(o => CountConnections(o.Connections));
+            mergeCapacities.Add(Math.Max(0, maxConn - 1));
+        }
+
+        var totalMergeCapacity = mergeCapacities
+            .OrderByDescending(x => x)
+            .Take(emptyCells)
+            .Sum();
+
+        if (totalMergeCapacity < components - 1) return false;
+
+        return true;
+    }
+
+    private static int CountConnections(Direction conn)
+    {
+        var c = 0;
+        if (conn.HasFlag(Direction.Up)) c++;
+        if (conn.HasFlag(Direction.Down)) c++;
+        if (conn.HasFlag(Direction.Left)) c++;
+        if (conn.HasFlag(Direction.Right)) c++;
+        return c;
+    }
+
+    private int CountConnectedComponents()
+    {
+        var visited = new bool[GridSize, GridSize];
+        var components = 0;
+
+        for (var sr = 0; sr < GridSize; sr++)
+        {
+            for (var sc = 0; sc < GridSize; sc++)
+            {
+                if (_grid[sr, sc] == null || visited[sr, sc]) continue;
+
+                components++;
+                visited[sr, sc] = true;
+                var stack = new Stack<(int R, int C)>();
+                stack.Push((sr, sc));
+
+                while (stack.TryPop(out var pos))
+                {
+                    var (cr, cc) = pos;
+                    var conn = _grid[cr, cc].Connections;
+
+                    foreach (var (dir, dr, dc) in Directions)
+                    {
+                        if (!conn.HasFlag(dir)) continue;
+
+                        var nr = cr + dr;
+                        var nc = cc + dc;
+
+                        if (nr < 0 || nr >= GridSize || nc < 0 || nc >= GridSize) continue;
+                        if (visited[nr, nc] || _grid[nr, nc] == null) continue;
+
+                        var neighborConn = _grid[nr, nc].Connections;
+                        if (!neighborConn.HasFlag(dir.Opposite())) continue;
+
+                        visited[nr, nc] = true;
+                        stack.Push((nr, nc));
+                    }
+                }
+            }
+        }
+
+        return components;
+    }
+
+    private double CalculateScore()
     {
         var score = 0.0;
 
@@ -271,7 +432,7 @@ public class VoyagePlanner
             {
                 var cellScore = 0.0;
 
-                foreach (var (dir, dr, dc) in _directions)
+                foreach (var (_, dr, dc) in Directions)
                 {
                     var nr = r + dr;
                     var nc = c + dc;
@@ -279,11 +440,10 @@ public class VoyagePlanner
                     if (nr < 0 || nr >= GridSize || nc < 0 || nc >= GridSize) continue;
                     if (_grid[nr, nc] == null) continue;
 
-                    var neighbor = _grid[nr, nc];
-                    cellScore += neighbor.Piece.Modifiers.Sum(modifier => modifier.Weight);
+                    cellScore += _grid[nr, nc].Piece.Modifiers.Sum(m => m.Weight);
                 }
 
-                score += cellScore * puzzle.LocationModifiers[r, c];
+                score += cellScore * _puzzle.LocationModifiers[r, c];
             }
         }
 
@@ -293,7 +453,7 @@ public class VoyagePlanner
     private double CalculateUpperBoundScore()
     {
         var score = 0.0;
-        var filledCount = 0;
+        var emptyCount = 0;
 
         for (var i = 0; i < GridSize; i++)
         {
@@ -301,43 +461,34 @@ public class VoyagePlanner
             {
                 if (_grid[i, j] != null)
                 {
-                    filledCount++;
                     var cellScore = 0.0;
-
-                    foreach (var (dir, dr, dc) in _directions)
+                    foreach (var (_, dr, dc) in Directions)
                     {
                         var nr = i + dr;
                         var nc = j + dc;
-
                         if (nr < 0 || nr >= GridSize || nc < 0 || nc >= GridSize) continue;
 
-                        if (_grid[nr, nc] != null)
-                        {
-                            cellScore += _grid[nr, nc].Piece.Modifiers.Sum(modifier => modifier.Weight);
-                        }
-                        else
-                        {
-                            cellScore += _maxModifierPerPiece;
-                        }
+                        cellScore += _grid[nr, nc] != null
+                            ? _grid[nr, nc].Piece.Modifiers.Sum(m => m.Weight)
+                            : _maxModifierPerPiece;
                     }
-
                     score += cellScore * _puzzle.LocationModifiers[i, j];
+                }
+                else
+                {
+                    var neighborCount = 0;
+                    foreach (var (_, dr, dc) in Directions)
+                    {
+                        var nr = i + dr;
+                        var nc = j + dc;
+                        if (nr >= 0 && nr < GridSize && nc >= 0 && nc < GridSize)
+                            neighborCount++;
+                    }
+                    score += neighborCount * _maxModifierPerPiece * _puzzle.LocationModifiers[i, j];
+                    emptyCount++;
                 }
             }
         }
-
-        var emptyCount = GridSize * GridSize - filledCount;
-        var maxNeighbors = 4;
-        var maxLocMod = 0.0;
-        for (var i = 0; i < GridSize; i++)
-        {
-            for (var j = 0; j < GridSize; j++)
-            {
-                maxLocMod = Math.Max(maxLocMod, _puzzle.LocationModifiers[i, j]);
-            }
-        }
-
-        score += emptyCount * maxNeighbors * _maxModifierPerPiece * maxLocMod;
 
         return score;
     }
@@ -346,13 +497,8 @@ public class VoyagePlanner
     {
         var clone = new MapPiecePlacement[GridSize, GridSize];
         for (var i = 0; i < GridSize; i++)
-        {
             for (var j = 0; j < GridSize; j++)
-            {
                 clone[i, j] = _grid[i, j];
-            }
-        }
-
         return clone;
     }
 

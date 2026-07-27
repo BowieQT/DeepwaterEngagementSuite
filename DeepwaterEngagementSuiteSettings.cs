@@ -182,6 +182,9 @@ public class VoyageSettings
     [Menu("Show optimizer window")]
     public ToggleNode ShowOptimizerWindow { get; set; } = new ToggleNode(true);
 
+    [Menu("Solver time limit (seconds)", "Max time the solver runs before returning the best solution found so far. 0 = no limit.")]
+    public RangeNode<int> SolverTimeLimitSeconds { get; set; } = new RangeNode<int>(5, 1, 120);
+
     [Menu("Line thickness")]
     public RangeNode<int> LineThickness { get; set; } = new RangeNode<int>(3, 1, 12);
 
