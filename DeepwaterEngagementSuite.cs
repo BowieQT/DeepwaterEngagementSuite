@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -20,6 +21,7 @@ using ExileCore.Shared.Helpers;
 using ExileCore.Shared.Nodes;
 using GameOffsets.Native;
 using ImGuiNET;
+using Newtonsoft.Json;
 using SharpDX;
 using SixLabors.PolygonClipper;
 using Direction = DeepwaterEngagementSuite.VoyagePlannerData.Direction;
@@ -67,14 +69,34 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
     public override bool Initialise()
     {
         InitOnce();
+        _profilesDirectory = Path.Combine(ConfigDirectory, "profiles");
+        Directory.CreateDirectory(_profilesDirectory);
+        EnsureDefaultProfile();
+        LoadProfiles();
         Graphics.InitImage(TextureName);
         Settings.PlannerSettings.StartSearch.OnPressed += StartSearch;
         Settings.PlannerSettings.StopSearch.OnPressed += StopSearch;
         Settings.PlannerSettings.ClearSearch.OnPressed += ClearSearch;
+        Settings.VoyageSettings.AddProfile.OnPressed += OnAddProfile;
+        Settings.VoyageSettings.ReloadProfiles.OnPressed += OnReloadProfiles;
+        Settings.VoyageSettings.DeleteCurrentProfile.OnPressed += OnDeleteCurrentProfile;
+        Settings.VoyageSettings.ProfileSelector.OnValueSelected += OnProfileSelected;
+        Settings.VoyageSettings.ProfileSelector.Values = Settings.VoyageSettings.Profiles.Select(p => p.Name).ToList();
+        if (Settings.VoyageSettings.Profiles.Count > 0)
+        {
+            ApplyProfile(Settings.VoyageSettings.Profiles[0].Name);
+        }
+        Settings.VoyageSettings.ProfileRenameNode.DrawDelegate = DrawProfileRenameNode;
         RegisterHotkey(Settings.PlannerSettings.StartSearchHotkey);
         RegisterHotkey(Settings.PlannerSettings.StopSearchHotkey);
         RegisterHotkey(Settings.PlannerSettings.ClearSearchHotkey);
         return base.Initialise();
+    }
+
+    public override void OnSaveSettings()
+    {
+        SyncCurrentProfileToMemory();
+        SaveProfiles();
     }
 
     private static void RegisterHotkey(HotkeyNodeV2 hotkey)

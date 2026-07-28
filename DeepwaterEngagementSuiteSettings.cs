@@ -173,6 +173,13 @@ public class BubbleSettings
 [Submenu(CollapsedByDefault = true)]
 public class VoyageSettings
 {
+    [JsonIgnore] [IgnoreMenu] public List<VoyageProfileEntry> Profiles { get; set; } = new();
+    public ListNode ProfileSelector { get; set; } = new ListNode();
+    [JsonIgnore] public ButtonNode AddProfile { get; set; } = new ButtonNode();
+    [JsonIgnore] public ButtonNode ReloadProfiles { get; set; } = new ButtonNode();
+    [JsonIgnore] [Menu("Delete current profile (hold shift)")] public ButtonNode DeleteCurrentProfile { get; set; } = new ButtonNode();
+    [JsonIgnore] public CustomNode ProfileRenameNode { get; set; } = new CustomNode();
+
     public VoyageSettings()
     {
         ClearBorderModifiers = new ButtonNode() { OnPressed = () => { BorderModifiers.Content.Clear(); } };
@@ -193,6 +200,7 @@ public class VoyageSettings
     public ButtonNode ClearBorderModifiers { get; set; }
 
     [Menu(null, CollapsedByDefault = true)]
+    [JsonIgnore]
     public ContentNode<VoyageBorderModifier> BorderModifiers { get; set; } = new ContentNode<VoyageBorderModifier>
     {
         EnableControls = true,
@@ -206,6 +214,7 @@ public class VoyageSettings
     public ButtonNode ClearChartModifiers { get; set; }
 
     [Menu(null, CollapsedByDefault = true)]
+    [JsonIgnore]
     public ContentNode<VoyageChartModifier> ChartModifiers { get; set; } = new ContentNode<VoyageChartModifier>
     {
         EnableControls = true,
@@ -213,6 +222,12 @@ public class VoyageSettings
         ItemFactory = () => new VoyageChartModifier(),
         ItemFilter = (o, s) => o.Id.Value.Contains(s, StringComparison.OrdinalIgnoreCase),
     };
+}
+
+public class VoyageProfileEntry
+{
+    public string Name;
+    public VoyageProfile Profile;
 }
 
 [Submenu(CollapsedByDefault = true)]
@@ -233,7 +248,7 @@ public class VoyageBorderModifier
 public class VoyageChartModifier
 {
     public TextNode Id { get; set; } = new TextNode("");
-    public RangeNode<float> Weight { get; set; } = new RangeNode<float>(0, 0, 10);
+    public RangeNode<float> Weight { get; set; } = new RangeNode<float>(0, 0, 100);
     public ToggleNode IsGlobal { get; set; } = new ToggleNode(false);
     public ColorNode HighlightColor { get; set; } = Color.Violet;
 
