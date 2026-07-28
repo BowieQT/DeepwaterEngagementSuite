@@ -187,6 +187,7 @@ public class VoyageSettings
     [Menu("Solver time limit (seconds)", "Max time the solver runs before returning the best solution found so far. 0 = no limit.")]
     public RangeNode<int> SolverTimeLimitSeconds { get; set; } = new RangeNode<int>(5, 1, 120);
     public RangeNode<float> BorderHighlightThreshold { get; set; } = new RangeNode<float>(1.01f, 0, 10);
+    public RangeNode<float> ChartHighlightThreshold { get; set; } = new RangeNode<float>(1.0f, 0, 10);
 
     [JsonIgnore]
     public ButtonNode ClearBorderModifiers { get; set; }
@@ -234,6 +235,7 @@ public class VoyageChartModifier
     public TextNode Id { get; set; } = new TextNode("");
     public RangeNode<float> Weight { get; set; } = new RangeNode<float>(0, 0, 10);
     public ToggleNode IsGlobal { get; set; } = new ToggleNode(false);
+    public ColorNode HighlightColor { get; set; } = Color.Violet;
 
     public override string ToString()
     {

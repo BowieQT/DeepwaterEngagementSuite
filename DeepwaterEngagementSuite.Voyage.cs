@@ -124,7 +124,34 @@ public partial class DeepwaterEngagementSuite
             var mods = modsPerTileIndex.GetValueOrDefault(index) ?? [];
             var tileTopLeft = tile.GetClientRectCache.TopLeft.ToVector2Num();
             Graphics.DrawTextWithBackground($"({index / 3}, {index % 3})", tileTopLeft, Color.Black);
-            var tileCenter = tile.GetClientRectCache.Center.ToVector2Num() + new Vector2(0, 10);
+            var tileCenter = tile.GetClientRectCache.Center.ToVector2Num();
+            // Chart name above center
+            var chart = tile.ItemContainer?.Entity?.GetComponent<DeepwaterChart>();
+            if (chart != null)
+            {
+                var chartMods = tile.ItemContainer.Entity.GetComponent<Mods>()?.ImplicitMods ?? [];
+                var chartModOffset = -10f;
+                foreach (var im in chartMods)
+                {
+                    var chartMod = Settings.VoyageSettings.ChartModifiers.Content
+                        .FirstOrDefault(cm => cm.Id.Value.Equals(im.RawName, StringComparison.OrdinalIgnoreCase));
+                    var displayName = TrimChartPrefix(im.RawName);
+                    var prefix = chartMod?.IsGlobal.Value == true ? "[G] " : "";
+                    var weight = chartMod?.Weight.Value ?? 0;
+                    var chartName = $"{prefix}{displayName}\n({weight:F1})";
+                    var textSize = Graphics.MeasureText(chartName);
+                    if (!string.IsNullOrEmpty(chartName))
+                    {
+                        chartModOffset -= textSize.Y;
+                        Graphics.DrawTextWithBackground(chartName, tileCenter + new Vector2(0, chartModOffset),
+                            chartMod != null && chartMod.Weight.Value > Settings.VoyageSettings.ChartHighlightThreshold.Value
+                                ? chartMod.HighlightColor
+                                : Color.White, FontAlign.Center, Color.Black);
+                    }
+                }
+            }
+            // Border mods below center
+            tileCenter = tileCenter + new Vector2(0, 10);
             foreach (var itemMod in mods)
             {
                 var matchingSetting = Settings.VoyageSettings.BorderModifiers.Content.FirstOrDefault(c => c.Id.Value.Equals(itemMod.RawName, StringComparison.OrdinalIgnoreCase));
@@ -402,7 +429,12 @@ public partial class DeepwaterEngagementSuite
                 ImGui.TableNextColumn();
                 ImGui.Text($"{placement.Piece.Type}");
                 ImGui.TableNextColumn();
-                var modText = string.Join(", ", placement.Piece.Modifiers.Where(m => m.Name != "Default").Select(m => $"{m.Name}({m.Weight:F1})"));
+                var modText = string.Join(", ", placement.Piece.Modifiers.Where(m => m.Name != "Default").Select(m =>
+                {
+                    var displayName = TrimChartPrefix(m.Name);
+                    var prefix = m.IsGlobal ? "[Global] " : "";
+                    return $"{prefix}{displayName}({m.Weight:F1})";
+                }));
                 ImGui.Text(string.IsNullOrEmpty(modText) ? "-" : modText);
                 ImGui.PopID();
             }
@@ -517,5 +549,14 @@ public partial class DeepwaterEngagementSuite
             buf[y, x1] = v;
             buf[y, x2] = v;
         }
+    }
+
+    private static string TrimChartPrefix(string name)
+    {
+        if (name.StartsWith("MapDeepwaterChartVoyage", StringComparison.Ordinal))
+            return name["MapDeepwaterChartVoyage".Length..];
+        if (name.StartsWith("MapDeepwaterChartAdjacent", StringComparison.Ordinal))
+            return name["MapDeepwaterChartAdjacent".Length..];
+        return name;
     }
 }
