@@ -13,6 +13,7 @@ using ExileCore.PoEMemory.MemoryObjects;
 using ExileCore.Shared;
 using ExileCore.Shared.Enums;
 using ExileCore.Shared.Helpers;
+using GameOffsets.Native;
 using ImGuiNET;
 using SharpDX;
 using Direction = DeepwaterEngagementSuite.VoyagePlannerData.Direction;
@@ -34,6 +35,45 @@ public partial class DeepwaterEngagementSuite
     private double _voyageElapsed;
     private System.Diagnostics.Stopwatch _voyageStopwatch;
 
+    public List<NormalInventoryItem> GetAvailableCharts()
+    {
+        if (GameController.IngameState.IngameUi.VoyageWindow is { IsValid: true, IsVisible: true } voyageWindow)
+        {
+
+            var charts = voyageWindow.AvailableCharts;
+            if (!charts.Any())
+            {
+                return [];
+            }
+            var filters = Settings.VoyageSettings.IgnoredCharts.Content.Where(x => x.Enabled).Select(x => x.Query).ToList();
+            if (!filters.Any())
+            {
+                return charts;
+            }
+
+            var chartSize = charts[0].GetClientRectCache.Size;
+            var containerRect = voyageWindow.ChartContainer.GetClientRectCache;
+            var containerSize = containerRect.Size;
+            var inventorySize = new Vector2i(
+                (int)Math.Round(containerSize.Width/chartSize.Width),
+                (int)Math.Round(containerSize.Height / chartSize.Height)); //TODO: is this gettable somewhere?
+            var filtered = charts.Select(x =>
+                {
+                    var coord = ((x.GetClientRectCache.TopLeft - containerRect.TopLeft).ToVector2Num()
+                                 / new Vector2(containerSize.Width, containerSize.Height)
+                                 * inventorySize)
+                        .RoundToVector2I();
+                    return (x, new ChartData(x.Item, GameController, coord));
+                })
+                .Where(x => !filters.Any(f => f.Matches(x.Item2)))
+                .Select(x => x.x)
+                .ToList();
+            return filtered;
+        }
+
+        return [];
+    }
+
     private async SyncTask<bool> PlacePieces(VoyageSolution solution)
     {
         var tree = GameController.IngameState.IngameUi.VoyageWindow;
@@ -44,11 +84,12 @@ public partial class DeepwaterEngagementSuite
         await TaskUtils.NextFrame();
         Input.LeftUp();
         await TaskUtils.CheckEveryFrameWithThrow(() => tree.Tiles.All(x => x.ItemContainer == null), TimeSpan.FromSeconds(1));
+        var availableCharts = GetAvailableCharts();
         for (int i = 0; i < 9; i++)
         {
             var tile = tree.Tiles[i];
             var p = solution.Grid[i / 3, i % 3];
-            var pieceElem = tree.AvailableCharts[p.Piece.Id];
+            var pieceElem = availableCharts[p.Piece.Id];
             var click1Pos = pieceElem.GetClientRectCache.Center.ToVector2Num();
             var click2Pos = tile.GetClientRectCache.Center.ToVector2Num();
             Input.SetCursorPos(GameController.Window.GetWindowRectangleTimeCache.TopLeft.ToVector2Num() + click1Pos);
@@ -170,7 +211,7 @@ public partial class DeepwaterEngagementSuite
             }
         }
 
-        var charts = tree.AvailableCharts;
+        var charts = GetAvailableCharts();
         for (int i = 0; i < charts.Count; i++)
         {
             Graphics.DrawTextWithBackground($"#{i}", charts[i].GetClientRectCache.TopLeft.ToVector2Num(), Color.Black);
@@ -232,7 +273,7 @@ public partial class DeepwaterEngagementSuite
             {
                 var i = 0;
                 var pieces = new List<MapPiece>();
-                foreach (var chart in tree.AvailableCharts)
+                foreach (var chart in GetAvailableCharts())
                 {
                     if (chart.Item.TryGetComponent(out DeepwaterChart c))
                     {

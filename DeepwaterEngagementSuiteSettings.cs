@@ -1,10 +1,17 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Windows.Forms;
+using ExileCore;
+using ExileCore.PoEMemory.Elements;
+using ExileCore.PoEMemory.MemoryObjects;
 using ExileCore.Shared.Attributes;
 using ExileCore.Shared.Enums;
 using ExileCore.Shared.Interfaces;
 using ExileCore.Shared.Nodes;
+using GameOffsets.Native;
+using ImGuiNET;
+using ItemFilterLibrary;
 using Newtonsoft.Json;
 using SharpDX;
 
@@ -173,20 +180,24 @@ public class BubbleSettings
 [Submenu(CollapsedByDefault = true)]
 public class VoyageSettings
 {
-    [JsonIgnore] [IgnoreMenu] public List<VoyageProfileEntry> Profiles { get; set; } = new();
-    public ListNode ProfileSelector { get; set; } = new ListNode();
-    [JsonIgnore] public ButtonNode AddProfile { get; set; } = new ButtonNode();
-    [JsonIgnore] public ButtonNode ReloadProfiles { get; set; } = new ButtonNode();
-    [JsonIgnore] [Menu("Delete current profile (hold shift)")] public ButtonNode DeleteCurrentProfile { get; set; } = new ButtonNode();
-    [JsonIgnore] public CustomNode ProfileRenameNode { get; set; } = new CustomNode();
-
     public VoyageSettings()
     {
         ClearBorderModifiers = new ButtonNode() { OnPressed = () => { BorderModifiers.Content.Clear(); } };
         ClearChartModifiers = new ButtonNode() { OnPressed = () => { ChartModifiers.Content.Clear(); } };
     }
 
+    [JsonIgnore] [IgnoreMenu] public List<VoyageProfileEntry> Profiles { get; set; } = new();
+
     public ToggleNode EnableVoyageHandling { get; set; } = new ToggleNode(true);
+
+    [Menu(null, CollapsedByDefault = true)]
+    public ContentNode<VoyageExcludedChartSettings> IgnoredCharts { get; set; } = new ContentNode<VoyageExcludedChartSettings>
+    {
+        EnableControls = true,
+        EnableItemCollapsing = true,
+        ItemFactory = () => new VoyageExcludedChartSettings(),
+        ItemFilter = (o, s) => o.IFL.Value.Contains(s, StringComparison.OrdinalIgnoreCase),
+    };
 
     [Menu("Show optimizer window")]
     public ToggleNode ShowOptimizerWindow { get; set; } = new ToggleNode(true);
@@ -195,6 +206,11 @@ public class VoyageSettings
     public RangeNode<int> SolverTimeLimitSeconds { get; set; } = new RangeNode<int>(5, 1, 120);
     public RangeNode<float> BorderHighlightThreshold { get; set; } = new RangeNode<float>(1.01f, 0, 10);
     public RangeNode<float> ChartHighlightThreshold { get; set; } = new RangeNode<float>(1.0f, 0, 10);
+    public ListNode ProfileSelector { get; set; } = new ListNode();
+    [JsonIgnore] public ButtonNode AddProfile { get; set; } = new ButtonNode();
+    [JsonIgnore] public ButtonNode ReloadProfiles { get; set; } = new ButtonNode();
+    [JsonIgnore][Menu("Delete current profile (hold shift)")] public ButtonNode DeleteCurrentProfile { get; set; } = new ButtonNode();
+    [JsonIgnore] public CustomNode ProfileRenameNode { get; set; } = new CustomNode();
 
     [JsonIgnore]
     public ButtonNode ClearBorderModifiers { get; set; }
@@ -222,6 +238,56 @@ public class VoyageSettings
         ItemFactory = () => new VoyageChartModifier(),
         ItemFilter = (o, s) => o.Id.Value.Contains(s, StringComparison.OrdinalIgnoreCase),
     };
+}
+
+[Submenu(CollapsedByDefault = true)]
+public class VoyageExcludedChartSettings
+{
+    private static readonly ConcurrentDictionary<string, ItemQuery<ChartData>> FilterCache = [];
+
+    public VoyageExcludedChartSettings()
+    {
+        Status.DrawDelegate = () =>
+        {
+            if (Query.FailedToCompile)
+            {
+                ImGui.Text($"Compilation failed: {Query.Error}");
+            }
+        };
+    }
+
+    [JsonIgnore]
+    public CustomNode Status { get; set; } = new CustomNode();
+
+    [Menu("IFL")]
+    public TextNode IFL { get; set; } = new TextNode("false");
+    public ToggleNode Enabled { get; set; } = new ToggleNode(true);
+
+    [IgnoreMenu]
+    [JsonIgnore]
+    public ItemQuery<ChartData> Query => FilterCache.GetOrAdd(IFL.Value, ItemQuery.Load<ChartData>);
+
+    public override string ToString()
+    {
+        return $"{(Enabled ? "" : "[Disabled]")}{IFL.Value}###";
+    }
+}
+
+public class ChartData : ItemData
+{
+    public Vector2i Pos { get; }
+
+    public ChartData(Entity queriedItem, GameController gc, Vector2i pos) 
+        : base(queriedItem, gc)
+    {
+        Pos = pos;
+    }
+
+    public ChartData(Entity queriedItem, Entity groundItem, GameController gameController, Vector2i pos) 
+        : base(queriedItem, groundItem, gameController)
+    {
+        Pos = pos;
+    }
 }
 
 public class VoyageProfileEntry
