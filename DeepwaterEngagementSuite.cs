@@ -331,26 +331,42 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
     public override void Render()
     {
         DrawVoyageHighlights();
+        var largePanelsOpen = GameController.IngameState.IngameUi.FullscreenPanels.Any(x => x.IsVisible) ||
+                          GameController.IngameState.IngameUi.LargePanels.Any(x => x.IsVisible);
 
         if (Handler == null)
         {
             return;
         }
 
-        if (Settings.BubbleSettings.ShowBubbles)
+        if (!largePanelsOpen && (Settings.BubbleSettings.ShowBubblesOnMap ||
+                                 Settings.BubbleSettings.ShowBubblesInWorld))
         {
             if (Bubbles is { Count: > 0 } bubbles)
             {
                 _placedBubblePolygon = _shapeCache.GetOrAdd(bubbles.ToHashSet(), a => a.Select(x => GetCirclePolygon(x.Item1, x.Item2)).Aggregate(PolygonClipper.Union));
-                foreach (var cont in _placedBubblePolygon)
+                if (Settings.BubbleSettings.ShowBubblesOnMap)
                 {
-                    var a = cont.Select(v => Graphics.GridToMap(new Vector2((float)v.X, (float)v.Y), _playerGridPos)).ToList();
-                    Graphics.DrawPolyLine(a.ToArray(), Settings.BubbleSettings.BubbleColor.Value, 2);
+                    foreach (var cont in _placedBubblePolygon)
+                    {
+                        var a = cont.Select(v => Graphics.GridToMap(new Vector2((float)v.X, (float)v.Y), _playerGridPos)).ToList();
+                        Graphics.DrawPolyLine(a.ToArray(), Settings.BubbleSettings.BubbleColor.Value, 2);
+                    }
+                }
+
+                if (Settings.BubbleSettings.ShowBubblesInWorld)
+                {
+                    foreach (var cont in _placedBubblePolygon)
+                    {
+                        
+                        var a = cont.Select(v => Camera.WorldToScreen(GameController.IngameState.Data.ToWorldWithTerrainHeight(new Vector2((float)v.X, (float)v.Y)))).ToList();
+                        Graphics.DrawPolyLine(a.ToArray(), Settings.BubbleSettings.BubbleColor.Value, 2);
+                    }
                 }
             }
         }
 
-        if (Settings.BubbleSettings.MarkStartingBubble)
+        if (!largePanelsOpen && Settings.BubbleSettings.MarkStartingBubble)
         {
             foreach (var entity in GameController.EntityListWrapper.ValidEntitiesByType[EntityType.IngameIcon]
                          .Where(x => x.Path == "Metadata/Terrain/Leagues/Deepwater/Objects/ExtractionObject"))
@@ -380,30 +396,33 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
             StartSearch();
         }
 
-        foreach (var e in _cachedEntities.Values)
+        if (!largePanelsOpen)
         {
-            if (e.IsOpened)
-                continue;
-
-            switch (GetEntityType(e.Path))
+            foreach (var e in _cachedEntities.Values)
             {
-                case ExpeditionEntityType.Marker:
-                {
-                    var chestType = GetChestType(e.Path);
-                    var mapSettings = Settings.IconMapping.GetValueOrDefault(chestType, new IconDisplaySettings());
-                    var icon = mapSettings.Icon ?? DeepwaterEngagementSuiteSettings.GetDefaultIcon(chestType);
-                    var tint = mapSettings.Tint ?? DeepwaterEngagementSuiteSettings.GetDefaultTint(chestType);
-                    if (mapSettings.ShowOnMap)
-                    {
-                        DrawIconOnMap(e, icon, tint, Vector2.Zero);
-                    }
-
-                    if (mapSettings.ShowInWorld)
-                    {
-                        DrawIconInWorld(e, icon, tint, Vector2.Zero);
-                    }
-
+                if (e.IsOpened)
                     continue;
+
+                switch (GetEntityType(e.Path))
+                {
+                    case ExpeditionEntityType.Marker:
+                    {
+                        var chestType = GetChestType(e.Path);
+                        var mapSettings = Settings.IconMapping.GetValueOrDefault(chestType, new IconDisplaySettings());
+                        var icon = mapSettings.Icon ?? DeepwaterEngagementSuiteSettings.GetDefaultIcon(chestType);
+                        var tint = mapSettings.Tint ?? DeepwaterEngagementSuiteSettings.GetDefaultTint(chestType);
+                        if (mapSettings.ShowOnMap)
+                        {
+                            DrawIconOnMap(e, icon, tint, Vector2.Zero);
+                        }
+
+                        if (mapSettings.ShowInWorld)
+                        {
+                            DrawIconInWorld(e, icon, tint, Vector2.Zero);
+                        }
+
+                        continue;
+                    }
                 }
             }
         }

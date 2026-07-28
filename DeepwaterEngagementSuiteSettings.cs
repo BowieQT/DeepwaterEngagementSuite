@@ -151,8 +151,8 @@ public class PlannerSettings
 [Submenu(CollapsedByDefault = true)]
 public class BubbleSettings
 {
-    [Menu("Show bubble radius")]
-    public ToggleNode ShowBubbles { get; set; } = new ToggleNode(true);
+    public ToggleNode ShowBubblesOnMap { get; set; } = new ToggleNode(true);
+    public ToggleNode ShowBubblesInWorld { get; set; } = new ToggleNode(false);
 
     [Menu("Color for bubble radius")]
     public ColorNode BubbleColor { get; set; } = new ColorNode(Color.Red);
