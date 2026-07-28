@@ -233,6 +233,7 @@ public class VoyageChartModifier
 {
     public TextNode Id { get; set; } = new TextNode("");
     public RangeNode<float> Weight { get; set; } = new RangeNode<float>(0, 0, 10);
+    public ToggleNode IsGlobal { get; set; } = new ToggleNode(false);
 
     public override string ToString()
     {

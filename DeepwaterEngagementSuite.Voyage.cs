@@ -222,9 +222,10 @@ public partial class DeepwaterEngagementSuite
                             }, rotation, [
                                 new Modifier("Default", 1), ..chart.Item.GetComponent<Mods>()?.ImplicitMods.Select(im =>
                             {
-                                var configuredWeight = Settings.VoyageSettings.ChartModifiers.Content
-                                    .FirstOrDefault(cm => cm.Id.Value.Equals(im.RawName, StringComparison.OrdinalIgnoreCase))?.Weight.Value;
-                                return new Modifier(im.RawName, configuredWeight ?? 0);
+                                var chartMod = Settings.VoyageSettings.ChartModifiers.Content
+                                    .FirstOrDefault(cm => cm.Id.Value.Equals(im.RawName, StringComparison.OrdinalIgnoreCase));
+                                var configuredWeight = chartMod?.Weight.Value;
+                                return new Modifier(im.RawName, configuredWeight ?? 0, chartMod?.IsGlobal.Value ?? false);
                             }) ?? []
                             ]);
                         pieces.Add(mp);

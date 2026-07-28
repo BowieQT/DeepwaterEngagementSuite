@@ -31,7 +31,7 @@ public class VoyagePlanner
     private int _filledCount;
 
     // Precomputed: for each piece, all (rotation, connections) pairs.
-    private record struct PieceOption(int PieceIdx, int Rotation, Direction Connections, double Weight);
+    private record struct PieceOption(int PieceIdx, int Rotation, Direction Connections, double LocalWeight, double GlobalWeight);
     private PieceOption[][] _pieceOptionsByGroup;
     private int[] _pieceToGroup;
 
@@ -50,21 +50,22 @@ public class VoyagePlanner
         _cancelled = false;
 
         _maxModifierPerPiece = puzzle.AvailablePieces
-            .Select(p => p.Modifiers.Sum(m => m.Weight))
+            .Select(p => p.LocalModifier)
             .DefaultIfEmpty(0)
             .Max();
 
-        // Group pieces by (Type, BaseConnections, TotalWeight) — pieces in the same group are
-        // interchangeable for both connectivity and scoring. We only try one piece per group at
-        // each cell, which collapses 25 pieces into ~7 groups.
-        var groupMap = new Dictionary<(PieceType, Direction, double), int>();
+        // Group pieces by (Type, BaseConnections, GlobalWeight, LocalWeight) — pieces in the
+        // same group are interchangeable for both connectivity and scoring.
+        var groupMap = new Dictionary<(PieceType, Direction, double, double), int>();
         var groups = new List<List<int>>();
         _pieceToGroup = new int[puzzle.AvailablePieces.Count];
 
         for (var i = 0; i < puzzle.AvailablePieces.Count; i++)
         {
             var p = puzzle.AvailablePieces[i];
-            var key = (p.Type, p.BaseConnections, p.Modifiers.Sum(m => m.Weight));
+            var globalWeight = p.GlobalModifier;
+            var localWeight = p.LocalModifier;
+            var key = (p.Type, p.BaseConnections, globalWeight, localWeight);
             if (!groupMap.TryGetValue(key, out var g))
             {
                 g = groups.Count;
@@ -75,16 +76,17 @@ public class VoyagePlanner
             _pieceToGroup[i] = g;
         }
 
-        // Precompute all (rotation, connections) options for each group, sorted by weight desc.
+        // Precompute all (rotation, connections) options for each group.
         _pieceOptionsByGroup = new PieceOption[groups.Count][];
         for (var g = 0; g < groups.Count; g++)
         {
             var piece = puzzle.AvailablePieces[groups[g][0]];
+            var globalWeight = piece.GlobalModifier;
+            var localWeight = piece.LocalModifier;
             var opts = new List<PieceOption>();
             for (var rot = 0; rot < piece.DistinctRotations; rot++)
             {
-                opts.Add(new PieceOption(groups[g][0], rot, piece.GetConnections(rot),
-                    piece.Modifiers.Sum(m => m.Weight)));
+                opts.Add(new PieceOption(groups[g][0], rot, piece.GetConnections(rot), localWeight, globalWeight));
             }
             _pieceOptionsByGroup[g] = opts.ToArray();
         }
@@ -425,12 +427,18 @@ public class VoyagePlanner
     private double CalculateScore()
     {
         var score = 0.0;
+        var globalSum = 0.0;
+
+        for (var r = 0; r < GridSize; r++)
+            for (var c = 0; c < GridSize; c++)
+                if (_grid[r, c] != null)
+                    globalSum += _grid[r, c].Piece.GlobalModifier;
 
         for (var r = 0; r < GridSize; r++)
         {
             for (var c = 0; c < GridSize; c++)
             {
-                var cellScore = 0.0;
+                var cellScore = globalSum;
 
                 foreach (var (_, dr, dc) in Directions)
                 {
@@ -440,7 +448,7 @@ public class VoyagePlanner
                     if (nr < 0 || nr >= GridSize || nc < 0 || nc >= GridSize) continue;
                     if (_grid[nr, nc] == null) continue;
 
-                    cellScore += _grid[nr, nc].Piece.Modifiers.Sum(m => m.Weight);
+                    cellScore += _grid[nr, nc].Piece.LocalModifier;
                 }
 
                 score += cellScore * _puzzle.LocationModifiers[r, c];
@@ -454,6 +462,22 @@ public class VoyagePlanner
     {
         var score = 0.0;
         var emptyCount = 0;
+        var actualGlobalSum = 0.0;
+
+        for (var i = 0; i < GridSize; i++)
+            for (var j = 0; j < GridSize; j++)
+                if (_grid[i, j] != null)
+                    actualGlobalSum += _grid[i, j].Piece.GlobalModifier;
+
+        // Upper bound on global sum: take only the top (9 - filled) unplaced global weights
+        var unplacedGlobal = new List<double>();
+        for (var i = 0; i < _pieceUsed.Length; i++)
+        {
+            if (_pieceUsed[i]) continue;
+            unplacedGlobal.Add(_pieceOptionsByGroup[_pieceToGroup[i]][0].GlobalWeight);
+        }
+        unplacedGlobal.Sort((a, b) => b.CompareTo(a));
+        var ubGlobalSum = actualGlobalSum + unplacedGlobal.Take(GridSize * GridSize - _filledCount).Sum();
 
         for (var i = 0; i < GridSize; i++)
         {
@@ -469,10 +493,10 @@ public class VoyagePlanner
                         if (nr < 0 || nr >= GridSize || nc < 0 || nc >= GridSize) continue;
 
                         cellScore += _grid[nr, nc] != null
-                            ? _grid[nr, nc].Piece.Modifiers.Sum(m => m.Weight)
+                            ? _grid[nr, nc].Piece.LocalModifier
                             : _maxModifierPerPiece;
                     }
-                    score += cellScore * _puzzle.LocationModifiers[i, j];
+                    score += (cellScore + ubGlobalSum) * _puzzle.LocationModifiers[i, j];
                 }
                 else
                 {
@@ -484,7 +508,7 @@ public class VoyagePlanner
                         if (nr >= 0 && nr < GridSize && nc >= 0 && nc < GridSize)
                             neighborCount++;
                     }
-                    score += neighborCount * _maxModifierPerPiece * _puzzle.LocationModifiers[i, j];
+                    score += (neighborCount * _maxModifierPerPiece + ubGlobalSum) * _puzzle.LocationModifiers[i, j];
                     emptyCount++;
                 }
             }
@@ -505,7 +529,7 @@ public class VoyagePlanner
     private VoyageSolutionResult FinalResult()
     {
         return new VoyageSolutionResult(
-            new List<VoyageSolution>(_topSolutions),
+            [.._topSolutions,],
             _nodesExplored,
             _nodesPruned);
     }
