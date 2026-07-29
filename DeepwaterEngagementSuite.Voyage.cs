@@ -107,9 +107,10 @@ public partial class DeepwaterEngagementSuite
             Input.LeftDown();
             await TaskUtils.NextFrame();
             Input.LeftUp();
-            await TaskUtils.CheckEveryFrameWithThrow(() => GameController.IngameState.IngameUi.Cursor.Action == MouseActionType.Free, TimeSpan.FromSeconds(1));
+            await TaskUtils.CheckEveryFrameWithThrow(() => GameController.IngameState.IngameUi.Cursor.Action == MouseActionType.Free &&
+                                                           tile.ItemContainer?.Entity.GetComponent<DeepwaterChart>()?.Rotation is not null, TimeSpan.FromSeconds(1));
 
-            while (tile.ItemContainer?.Entity.GetComponent<DeepwaterChart>().Rotation is {} rot && rot != p.Rotation)
+            while (tile.ItemContainer?.Entity.GetComponent<DeepwaterChart>()?.Rotation is {} rot && rot != p.Rotation)
             {
                 DebugWindow.LogMsg($"{rot}, {p.Rotation}");
                 var click3Pos = tile.GetClientRectCache.Center.ToVector2Num();

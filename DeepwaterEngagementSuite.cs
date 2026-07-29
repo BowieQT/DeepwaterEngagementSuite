@@ -1,13 +1,4 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Forms;
-using DeepwaterEngagementSuite.PathPlannerData;
+﻿using DeepwaterEngagementSuite.PathPlannerData;
 using DeepwaterEngagementSuite.VoyagePlannerData;
 using ExileCore;
 using ExileCore.PoEMemory;
@@ -22,8 +13,18 @@ using ExileCore.Shared.Nodes;
 using GameOffsets.Native;
 using ImGuiNET;
 using Newtonsoft.Json;
-using SharpDX;
 using SixLabors.PolygonClipper;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using Color = SharpDX.Color;
 using Direction = DeepwaterEngagementSuite.VoyagePlannerData.Direction;
 using Vector2 = System.Numerics.Vector2;
 using Vector3 = System.Numerics.Vector3;
@@ -167,6 +168,7 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
             var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterTormentedSpiritEncounter", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
             var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterCursedDucatDrop", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
             var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterLanternReplenishEncounter", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
+            var a when a.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterGoldenLantern", StringComparison.Ordinal) => ExpeditionEntityType.Marker,
             _ => ExpeditionEntityType.None,
         });
     }
@@ -190,6 +192,7 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
         var p when p.Contains("DeepwaterAltarOctopus", StringComparison.Ordinal) => IconPickerIndex.AltarOctopus,
         var p when p.Contains("DeepwaterTormentedSpiritEncounter", StringComparison.Ordinal) => IconPickerIndex.TormentedSpiritEncounter,
         var p when p.Contains("DeepwaterLanternReplenishEncounter", StringComparison.Ordinal) => IconPickerIndex.LanternReplenishEncounter,
+        var p when p.StartsWith("Metadata/Terrain/Leagues/Deepwater/Objects/DeepwaterGoldenLantern", StringComparison.Ordinal) => IconPickerIndex.GoldenLanternEncounter,
         _ => IconPickerIndex.OtherChests,
     };
 
@@ -358,9 +361,21 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
                 {
                     foreach (var cont in _placedBubblePolygon)
                     {
-                        
                         var a = cont.Select(v => Camera.WorldToScreen(GameController.IngameState.Data.ToWorldWithTerrainHeight(new Vector2((float)v.X, (float)v.Y)))).ToList();
-                        Graphics.DrawPolyLine(a.ToArray(), Settings.BubbleSettings.BubbleColor.Value, 2);
+                        bool irregular = false;
+                        for (int i = 0; i < a.Count; i++)
+                        {
+                            if (!a[i].DistanceLessThanOrEqual(a[(i + 1) % a.Count], 200))
+                            {
+                                irregular = true;
+                                break;
+                            }
+                        }
+
+                        if (!irregular)
+                        {
+                            Graphics.DrawPolyLine(a.ToArray(), Settings.BubbleSettings.BubbleColor.Value, 2);
+                        }
                     }
                 }
             }
@@ -398,6 +413,7 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
 
         if (!largePanelsOpen)
         {
+            var positions = new List<Vector2>();
             foreach (var e in _cachedEntities.Values)
             {
                 if (e.IsOpened)
@@ -411,6 +427,7 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
                         var mapSettings = Settings.IconMapping.GetValueOrDefault(chestType, new IconDisplaySettings());
                         var icon = mapSettings.Icon ?? DeepwaterEngagementSuiteSettings.GetDefaultIcon(chestType);
                         var tint = mapSettings.Tint ?? DeepwaterEngagementSuiteSettings.GetDefaultTint(chestType);
+                        positions.Add(e.GridPos);
                         if (mapSettings.ShowOnMap)
                         {
                             DrawIconOnMap(e, icon, tint, Vector2.Zero);
@@ -422,6 +439,20 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
                         }
 
                         continue;
+                    }
+                }
+            }
+
+            foreach (var e in GameController.EntityListWrapper.ValidEntitiesByType[EntityType.Terrain].Where(x => x.Path == "Metadata/Terrain/Leagues/Deepwater/Objects/Pointer"))
+            {
+                if (e.TryGetComponent(out Pointer pointer))
+                {
+                    foreach (var target in pointer.Targets)
+                    {
+                        if (!positions.Any(p => p.DistanceLessThanOrEqual(target, 1)))
+                        {
+                            DrawIcon(MapIconsIndex.AncestralEnemyTotem, Color.White, Graphics.GridToMap(target, target), target.GridToWorld(), true, Color.White, 1, 20);
+                        }
                     }
                 }
             }
@@ -756,7 +787,7 @@ public partial class DeepwaterEngagementSuite : BaseSettingsPlugin<DeepwaterEnga
         float iconSize)
     {
         var halfsize = iconSize / 2.0f;
-        var rect = new RectangleF(displayPosition.X, displayPosition.Y, 0, 0);
+        var rect = new SharpDX.RectangleF(displayPosition.X, displayPosition.Y, 0, 0);
         rect.Inflate(halfsize, halfsize);
         var isInBubbleRadius = Bubbles.Any(x => Vector2.Distance(x.Position, worldPosition) < x.Radius);
         var gridPosition = worldPosition.WorldToGrid();

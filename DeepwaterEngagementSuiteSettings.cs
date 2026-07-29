@@ -72,6 +72,7 @@ public class DeepwaterEngagementSuiteSettings : ISettings
         IconPickerIndex.AltarOctopus => DefaultAltarOctopusIcon,
         IconPickerIndex.TormentedSpiritEncounter => DefaultTormentedSpiritEncounterIcon,
         IconPickerIndex.LanternReplenishEncounter => DefaultLanternReplenishEncounterIcon,
+        IconPickerIndex.GoldenLanternEncounter => MapIconsIndex.LabyrinthGoldKey,
         _ => DefaultOtherChestIcon,
     };
 
