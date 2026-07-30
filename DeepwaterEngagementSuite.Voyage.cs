@@ -212,11 +212,24 @@ public partial class DeepwaterEngagementSuite
             }
         }
 
-        var charts = GetAvailableCharts();
-        for (int i = 0; i < charts.Count; i++)
-        {
-            Graphics.DrawTextWithBackground($"#{i}", charts[i].GetClientRectCache.TopLeft.ToVector2Num(), Color.Black);
+        var charts = GetAvailableCharts();     
+        for (int i = 0; i < charts.Count; i++) {
+            var pos = charts[i].GetClientRectCache.TopLeft.ToVector2Num();
+            var size = Graphics.DrawTextWithBackground($"#{i}", pos, Color.Black);
+            var chartMods = charts[i].Entity.GetComponent<Mods>()?.ImplicitMods ?? [];
+            
+            foreach (var chartMod in chartMods) {
+                var chartSettings = Settings.VoyageSettings.ChartModifiers.Content
+                    .FirstOrDefault(cm => cm.Id.Value.Equals(chartMod.RawName, StringComparison.OrdinalIgnoreCase));
+                if (chartSettings != null && !string.IsNullOrEmpty(chartSettings.Label.Value)) {
+                    pos.Y += size.Y;
+                    Graphics.DrawTextWithBackground(chartSettings.Label.Value, pos, chartSettings.HighlightColor, Color.Black);
+                }
+            }
         }
+
+
+        
 
         if (settings.ShowOptimizerWindow.Value)
         {
