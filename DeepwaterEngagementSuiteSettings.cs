@@ -300,7 +300,7 @@ public class VoyageProfileEntry
 [Submenu(CollapsedByDefault = true)]
 public class VoyageBorderModifier
 {
-    public TextNode Id { get; set; } = new TextNode("");
+    public TextNode Id { get; set; } = new TextNode("");    
     public TextNode Abbreviation { get; set; } = new TextNode("");
     public RangeNode<float> ValueMultiplier { get; set; } = new RangeNode<float>(1, 0, 10);
     public ColorNode HighlightColor { get; set; } = Color.Cyan;
@@ -315,6 +315,7 @@ public class VoyageBorderModifier
 public class VoyageChartModifier
 {
     public TextNode Id { get; set; } = new TextNode("");
+    public TextNode Label { get; set; } = new TextNode("");
     public RangeNode<float> Weight { get; set; } = new RangeNode<float>(0, 0, 100);
     public ToggleNode IsGlobal { get; set; } = new ToggleNode(false);
     public ColorNode HighlightColor { get; set; } = Color.Violet;
